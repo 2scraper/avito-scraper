@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><title>Доступ ограничен: проблема с IP</title></head>
+<body>
+<form autocomplete="off" class="form js-submit js-firewall-form">
+<div id="h-captcha" style="display: none">
+<p class="text">
+                Иногда такое случается — чтобы вернуться на сайт, поставьте галочку и нажмите «Продолжить».
+            </p>
+<div class="h-captcha" data-callback="sethCaptchaResponse" data-sitekey="070db171-ddb9-4c93-b7f6-d25d3c9d7e28"><iframe allow="private-state-token-redemption" data-hcaptcha-response="" data-hcaptcha-widget-id="0rm2duou9nxj" frameborder="0" scrolling="no" src="https://newassets.hcaptcha.com/captcha/v1/05219f0822161da4c4a6f3aed6bf6d6fae1ba8e1/static/hcaptcha.html#frame=checkbox&amp;id=0rm2duou9nxj&amp;host=www.avito.ru&amp;sentry=true&amp;reportapi=https%3A%2F%2Faccounts.hcaptcha.com&amp;recaptchacompat=off&amp;custom=false&amp;hl=ru&amp;tplinks=on&amp;andint=off&amp;pstissuer=https%3A%2F%2Fpst-issuer.hcaptcha.com&amp;sitekey=070db171-ddb9-4c93-b7f6-d25d3c9d7e28&amp;theme=light&amp;origin=https%3A%2F%2Fwww.avito.ru&amp;clientOptions=%7B%22sentry%22%3Atrue%2C%22reportapi%22%3A%22https%3A%2F%2Faccounts.hcaptcha.com%22%2C%22recaptchacompat%22%3A%22off%22%2C%22custom%22%3Afalse%2C%22hl%22%3A%22ru%22%2C%22tplinks%22%3A%22on%22%2C%22andint%22%3A%22off%22%2C%22pat%22%3A%22on%22%2C%22pstissuer%22%3A%22https%3A%2F%2Fpst-issuer.hcaptcha.com%22%2C%22endpoint%22%3A%22https%3A%2F%2Fapi.hcaptcha.com%22%2C%22theme%22%3A%22light%22%2C%22size%22%3A%22normal%22%2C%22confirm-nav%22%3Afalse%7D" style="pointer-events: auto; background-color: rgba(255, 255, 255, 0); border-radius: 4px; width: 302px; height: 76px; overflow: hidden;" tabindex="0" title="Виджет с флажком для проверки безопасности hCaptcha"></iframe><textarea id="h-captcha-response-0rm2duou9nxj" name="h-captcha-response" style="display: none;"></textarea></div>
+<textarea id="h-captcha-response" name="e-captcha-response" style="display: none;"></textarea>
+<script>
+                function sethCaptchaResponse(response) {
+                    document.getElementById('h-captcha-response').value = response;
+                }
+            </script>
+<script async="" defer="" src="https://hcaptcha.com/1/api.js?hl=ru&amp;recaptchacompat=off"></script>
+</div>
+<fieldset class="js-form-captcha form-fieldset form-captcha form-captcha-inline" id="inner-captcha" style="display: none">
+<p class="text">
+                Иногда такое случается — чтобы вернуться на сайт, введите символы с картинки.
+            </p>
+<div class="form-fieldset__context">
+<input autocapitalize="off" autocomplete="off" autocorrect="off" class="form-captcha-input js-captcha-input" id="form-input" name="captcha" style="" type="text"/>
+<img class="form-captcha-image js-form-captcha-image"/>
+<div class="form-captcha-refresh js-form-captcha-refresh"></div>
+</div>
+<span class="form-fieldset__error"></span>
+<span class="form-fieldset__error form-fieldset__error_js js-error"></span>
+</fieldset>
+<div id="geetest_captcha" style="display: inline-block;">
+<p class="text">
+                Иногда такое случается, чтобы вернуться на сайт <b>нажмите на кнопку Продолжить</b> для решения капчи
+            </p>
+<script async="" defer="" src="https://www.avito.st/s/captcha/gt4.js"></script>
+<input name="captcha-response" style="" type="hidden"/>
+</div>
+<div class="form-action">
+<button class="button" name="submit" type="button">Продолжить</button>
+</div>
+</form>
+<script>
+    class Captcha {
+        constructor(container) {
+            this.container = container;
+            this.img = this.container.querySelector('.js-form-captcha-image');
+            this.spinner = this.container.querySelector('.js-form-captcha-refresh');
+            this.errorField = this.container.querySelector('.form-fieldset__error_js');
+            this.isBusy = false;
+
+            this.spinner.addEventListener('click', () => {
+                if (this.isBusy) {
+                    return false;
+                }
+                this.isBusy = true;
+
+                this.animate();
+
+                return true;
+            });
+        }
+
+        /**
+         * Обновить изображение
+         * @return {Captcha}
+         */
+        changeImage(image) {
+            this.img.setAttribute('src', image);
+
+            return this;
+        }
+
+        /**
+         * Показать ошибку
+         * @param {string} errorMessage текст ошибки
+         * @return {Captcha}
+         */
+        showError(errorMessage) {
+            this.errorField.textContent = errorMessage;
+            this.container.classList.add('is-error');
+
+            return this;
+        }
+
+        /**
+         * Спрятать ошибку
+         * @return {Captcha}
+         */
+        hideError() {
+            this.errorField.textContent = '';
+            this.container.classList.add('is-error');
+
+            return this;
+        }
+
+        /**
+         * Анимация спиннера
+         * @return {Captcha}
+         */
+        animate() {
+            const spinner = this.spinner;
+            const events = ['animationend', 'webkitAnimationEnd', 'oanimationend', 'MSAnimationEnd'];
+
+            spinner.classList.add('is-animation');
+
+            events.forEach((event) => {
+                spinner.addEventListener(
+                    event,
+                    () => {
+                        spinner.classList.remove('is-animation');
+                        this.isBusy = false;
+                    },
+                    { once: true }
+                );
+            });
+
+            return this;
+        }
+    }
+
+    function showRedirectMessage() {
+        const formAction = document.querySelector('.form-action');
+        if (formAction) {
+            formAction.innerHTML = '<p style="color: green; font-size: 16px; font-weight: 700;">Проверка пройдена, перенаправление...</p>';
+        }
+    }
+
+    const INTERNAL_CAPTCHA = 'internalCaptcha';
+    const H_CAPTCHA = 'hCaptcha';
+    const GEETEST_CAPTCHA = 'geeTest';
+
+    document.addEventListener('DOMContentLoaded', async () => {
+        if (document.cookie.split(';').some(c => c.trim().startsWith('captcha_solved='))) {
+            showRedirectMessage();
+            setTimeout(() => { window.location = location.href; }, 3000);
+            return;
+        }
+
+        const form = document.querySelector('.js-firewall-form');
+        form.addEventListener('submit', submitCaptcha);
+
+        const captcha = await getCaptcha();
+        await renderCaptcha(captcha, true);
+    });
+
+    const submitCaptcha = async (e) => {
+        e.preventDefault();
+        const hCaptcha = document.querySelector('#h-captcha-response');
+        const input = document.querySelector('#form-input');
+        const geetestCaptcha = document.querySelector('input[name=captcha-response]');
+        const captchaValue = input.value.trim();
+        const hCaptchaValue = hCaptcha.value;
+        const geetestCaptchaValue = geetestCaptcha.value ? JSON.parse(geetestCaptcha.value) : {};
+
+        const { verified, captcha } = await verifyCaptcha({
+            captcha: captchaValue,
+            hCaptchaResponse: hCaptchaValue,
+            geetestResponse: geetestCaptchaValue,
+        });
+        const normalizedCaptcha = normalizeCaptcha(captcha);
+
+        if (verified || normalizedCaptcha?.type !== INTERNAL_CAPTCHA) {
+            document.cookie = 'captcha_solved=1; Path=/; Max-Age=10; SameSite=Lax';
+            showRedirectMessage();
+            setTimeout(() => { window.location = location.href; }, 300);
+            return;
+        }
+
+        await renderCaptcha(normalizedCaptcha);
+    };
+
+    function normalizeCaptcha(rawCaptcha = {}) {
+        if (!rawCaptcha || typeof rawCaptcha !== 'object') {
+            return {};
+        }
+
+        if (rawCaptcha.type) {
+            return rawCaptcha;
+        }
+
+        return (
+            rawCaptcha.geeTest ||
+            rawCaptcha.internalCaptcha ||
+            rawCaptcha.hCaptcha ||
+            rawCaptcha.disabled ||
+            {}
+        );
+    }
+
+    function getInternalCaptcha(internalCaptchaContainer) {
+        if (window.internalCaptcha) {
+            return window.internalCaptcha;
+        }
+        window.internalCaptcha = new Captcha(internalCaptchaContainer);
+        return window.internalCaptcha;
+    }
+
+    async function renderCaptcha({ type, image, message }, isFirst = false) {
+        const hCaptcha = document.querySelector('#h-captcha');
+        const internalCaptcha = document.querySelector('#inner-captcha');
+        const geeTestCaptcha = document.querySelector('#geetest_captcha');
+        const submitButton = document.querySelector('button[name=submit]');
+
+        switch (type) {
+            case INTERNAL_CAPTCHA:
+                internalCaptcha.style.display = 'block';
+                hCaptcha.style.display = 'none';
+                geeTestCaptcha.style.display = 'none';
+                submitButton.type = 'submit';
+                submitButton.removeEventListener('click', renderGeetestCaptcha);
+                return renderInternalCaptcha(image, message, isFirst);
+            case H_CAPTCHA:
+                internalCaptcha.style.display = 'none';
+                geeTestCaptcha.style.display = 'none';
+                hCaptcha.style.display = 'block';
+                submitButton.type = 'submit';
+                submitButton.removeEventListener('click', renderGeetestCaptcha);
+                break;
+            default:
+                internalCaptcha.style.display = 'none';
+                hCaptcha.style.display = 'none';
+                geeTestCaptcha.style.display = 'inline-block';
+                submitButton.type = 'button';
+                submitButton.addEventListener('click', renderGeetestCaptcha);
+        }
+    }
+
+    function renderInternalCaptcha(image = '', message = '', isFirst) {
+        const internalCaptchaContainer = document.querySelector('#inner-captcha');
+        const internalCaptcha = getInternalCaptcha(internalCaptchaContainer);
+        if (isFirst) {
+            const spinner = document.querySelector('.js-form-captcha-refresh');
+            spinner.addEventListener('click', updateCaptcha);
+        }
+
+        internalCaptcha.changeImage(image);
+        if (message) {
+            internalCaptcha.showError(message);
+        }
+    }
+
+    async function renderGeetestCaptcha() {
+        const captchaResponse = document.querySelector('input[name=captcha-response]');
+
+        return await new Promise(resolve => {
+            const captchaId = '2d9c743cf7d63dbc9db578a608196bcd'
+
+            initGeetest4({
+                captchaId: captchaId, // mandatory
+                product: 'bind', // mandatory. For how to pop out the CAPTCHA, refer to API reference
+                language: 'rus'
+            }, function (captcha) {
+                const form = document.querySelector('.js-firewall-form');
+
+                captcha.showCaptcha()
+
+                captcha
+                    .onSuccess(() => {
+                        var result = captcha.getValidate();
+                        if (!result) {
+                            console.error('validate captcha failed');
+                            captcha.reset();
+                        }
+                        result.captcha_id = captchaId;
+
+                        captchaResponse.value = JSON.stringify(result);
+
+                        form.dispatchEvent(new Event('submit'));
+                    })
+                    .onFail((failObj) => {
+                        captcha.reset();
+                    })
+                    .onError((err) => {
+                        console.error(err);
+                        captcha.reset();
+                    })
+                    .onClose(() => {
+                        alert('Пройдите проверку на человека, чтобы продолжить')
+                        captcha.reset();
+                    });
+            });
+        });
+    }
+
+    async function updateCaptcha() {
+        captcha = await getCaptcha(true);
+        renderCaptcha(captcha);
+    }
+
+    async function getCaptcha(refreshInternalCaptcha = false) {
+        return fetch('/web/5/firewallCaptcha/get', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshInternalCaptcha }),
+        })
+            .then((resp) => resp.json())
+            .then(({ success }) => {
+                return normalizeCaptcha((success && success.result && success.result.captcha) || {});
+            })
+            .catch((err) => {
+                console.log(err);
+                return {};
+            });
+    }
+
+    async function verifyCaptcha({ captcha = '', hCaptchaResponse = '', geetestResponse = {} }) {
+        const cubeResult = document.getElementById('cubeResult');
+
+        return fetch('/web/3/firewallCaptcha/verify', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Cube': cubeResult?.innerHTML
+            },
+            body: JSON.stringify({ captcha, hCaptchaResponse, ...geetestResponse }),
+        })
+            .then((res) => res.json())
+            .then((response) => {
+                const result = response && response.success && response.success.result;
+                const error = response && (response['bad-request'] || response['internal-error']);
+                if (error?.message) {
+                    throw new Error(error.message);
+                }
+                return result || {};
+            })
+            .catch((err) => {
+                console.log(err);
+                return {};
+            });
+    }
+</script>
+</body></html>

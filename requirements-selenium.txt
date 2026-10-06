@@ -1,0 +1,9 @@
+# Selenium engine.
+#
+# Works against a browser it launches itself. It CANNOT attach to an
+# authenticated remote CDP endpoint (chromedriver's `debuggerAddress` takes a
+# bare host:port with nowhere to put credentials). An authenticated proxy is
+# reached through proxy_forwarder.py on 127.0.0.1 (WebDriver BiDi's
+# add_auth_handler deadlocked on 4.50.0, measured).
+#
+selenium>=4.15.0

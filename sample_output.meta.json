@@ -1,0 +1,21 @@
+{
+  "source": "avito.ru",
+  "mode": "listing",
+  "status": "complete",
+  "stop_reason": "completed",
+  "pages_requested": 3,
+  "pages_completed": 3,
+  "pages_failed": [],
+  "products": 147,
+  "scope": {
+    "listing": "https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAkS0wA3OqzmwwQ2I_Dc",
+    "mode": "listing",
+    "pages": 3,
+    "max_products": null,
+    "schema_version": "9a50e2614fb5"
+  },
+  "start_url": "https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAkS0wA3OqzmwwQ2I_Dc",
+  "final_url": "https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAkS0wA3OqzmwwQ2I_Dc?p=3",
+  "finished_at": "2026-10-06T11:43:21.957079+00:00",
+  "note": "Cut from a real 3-page Playwright run over the Scraping Browser API on 2026-10-06: 10 of its 147 rows; seller names and slugs replaced with placeholders."
+}

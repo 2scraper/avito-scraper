@@ -1,0 +1,108 @@
+name: Bug report
+description: The scraper ran but the result was wrong, empty, or it crashed.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste an API key, a proxy password or a full `ws://user:pass@...`
+        endpoint into a public issue.** The scrapers mask credentials in their
+        own logs; raw HTML dumps and `.env` files do not. Replace them with `***`.
+
+        Answers to most reports, before you file:
+
+        - **Exit 3 (blocked)?** avito.ru's firewall. Read the run's
+          `.latest_attempt.meta.json` → `transport_facts.walls` / `solves`:
+          was a captcha met, was a solve attempted, was it `verified`? A solve
+          through a different exit than the browser's is rejected by the site
+          (TROUBLESHOOTING.md).
+        - **Exit 5?** A transport fault — the site was never reached. Most
+          often an expired proxy session (`500 proxy_error` on connect) or a
+          profile still locked by a previous run. Rebuild the endpoint with
+          `tools/browser_profile_client.py connection --mint-session --write-env`.
+        - **`seller_name` empty?** Avito shows private persons as
+          «Пользователь» with no profile link; the scraper does not export that
+          placeholder. Companies are named.
+        - **`original_price` empty?** Only one of the site's two renderings
+          states it; `price_source` says which one a row came from.
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Which engine
+      options:
+        - playwright_scraper.py (the primary engine)
+        - puppeteer_scraper.py
+        - selenium_scraper.py
+        - other / not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Which --mode
+      options: [listing, item, seller]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: browser_route
+    attributes:
+      label: How was the browser reached
+      options:
+        - The Scraping Browser API over --cdp-endpoint
+        - A browser the script launched itself, on AVITO_PROXY
+        - Not applicable
+    validations:
+      required: true
+
+  - type: input
+    id: exit_code
+    attributes:
+      label: Exit code
+      description: "`echo $?` straight after the run. The table is in the README."
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: The exact command
+      description: With credentials replaced by `***`.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The whole `--verbose` run, credentials replaced by `***`.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        ```
+        python3 -c "import sys, platform; print(sys.version, platform.platform())"
+        pip list 2>/dev/null | grep -Ei "playwright|pyppeteer|selenium|beautifulsoup4|requests"
+        python3 smoke_test.py | tail -3
+        ```
+      render: text
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: The offline suite passes on my machine (`python3 smoke_test.py`)
+          required: true
+        - label: I removed every API key, password and credentialled URL from this report
+          required: true

@@ -1,0 +1,60 @@
+name: Site changed / parser no longer matches
+description: avito.ru changed something and rows came back empty or wrong.
+labels: ["site-change"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The most common way a scraper stops working. Before filing, two
+        things that look like a site change and are not:
+
+        * **«Доступ ограничен: проблема с IP»** (exit 3) is the firewall, not a
+          markup change — see TROUBLESHOOTING.md.
+        * **A search with no matches** is served with ~50 «Похожие объявления»
+          cards; the scraper reports it as empty on purpose.
+
+        Where the data lives (README, "How it works"): listing cards in the DOM
+        (`data-marker="item"`) or the `data-mfe-state` JSON; item pages in
+        `__staticRouterHydrationData`; seller pages in the DOM. Saying which
+        one moved narrows the fix a lot.
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Which --mode
+      options: [listing, item, seller, not sure]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: what_broke
+    attributes:
+      label: What stopped matching
+      options:
+        - 0 rows from a listing that visibly has items
+        - A field is null or wrong (price, seller, location, ...)
+        - Item mode returns no item data
+        - Seller mode returns no profile
+        - The firewall changed (a captcha type other than GeeTest)
+        - Something else
+    validations:
+      required: true
+
+  - type: input
+    id: url
+    attributes:
+      label: URL
+      placeholder: "https://www.avito.ru/moskva/telefony/mobilnye_telefony"
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: >-
+        Run with `--dump-html dump.html --verbose` and paste the relevant
+        fragment (remove anything personal). The `.latest_attempt.meta.json`
+        beside the output says which page state each page was classified as.
+    validations:
+      required: true

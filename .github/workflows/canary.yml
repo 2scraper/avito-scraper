@@ -1,0 +1,107 @@
+name: canary
+
+# ONE real run a day against a known-good category, to catch the site
+# changing its markup before a user does. THREE pages, so pagination is
+# exercised: a one-page canary is how a silent single-page bug survived in a
+# sibling repo.
+#
+# The transport is the Scraping Browser API on a Russian exit — a GitHub
+# runner is a datacentre address outside Russia, and avito.ru's firewall
+# answers plain clients from a Russian residential exit with HTTP 429 6 times
+# of 6 (measured 2026-10-06).
+#
+# Why the CDP endpoint is BUILT here rather than stored as a secret: it embeds
+# a session-pinned proxy, and a session expires (-sessTime-). An endpoint built
+# on an expired session answers `500 proxy_error` (measured). So the job mints
+# a fresh session from the base credential and builds the endpoint on it, and
+# the captcha solver gets that same session — a GeeTest token solved from a
+# different exit is rejected (measured).
+#
+# Needs: secrets TWOCAPTCHA_KEY and AVITO_PROXY (the base gateway login), and
+# repository variables AVITO_BROWSER_ACCOUNT_ID / AVITO_BROWSER_PROFILE_ID.
+# Without them the job goes GREEN with a ::notice:: — a check that is always
+# red teaches everyone to ignore checks.
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+jobs:
+  live:
+    runs-on: ubuntu-22.04   # NOT ubuntu-latest: playwright's --with-deps
+                            # apt step dies on 24.04.
+    env:
+      # `secrets` is not available in a job-level `if`; presence goes through
+      # job env and is read in each step's `if`.
+      READY: ${{ secrets.TWOCAPTCHA_KEY != '' && secrets.AVITO_PROXY != '' && vars.AVITO_BROWSER_ACCOUNT_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Explain the skip
+        if: env.READY != 'true'
+        run: |
+          echo "::notice::Skipped: needs secrets TWOCAPTCHA_KEY and AVITO_PROXY and the"
+          echo "::notice::variable AVITO_BROWSER_ACCOUNT_ID. A GitHub runner is not a"
+          echo "::notice::Russian residential address; a live run from here without the"
+          echo "::notice::Scraping Browser would be red every day regardless of the code."
+
+      - name: Install
+        if: env.READY == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-playwright.txt
+
+      - name: Build a fresh endpoint and its matching solver proxy
+        if: env.READY == 'true'
+        # Credentials through the ENVIRONMENT, never argv. The tool writes
+        # AVITO_CDP_ENDPOINT and the minted AVITO_PROXY into a 0600 .env and
+        # prints both masked.
+        env:
+          TWOCAPTCHA_KEY: ${{ secrets.TWOCAPTCHA_KEY }}
+          AVITO_PROXY: ${{ secrets.AVITO_PROXY }}
+        run: |
+          install -m 600 /dev/null .env
+          python3 tools/browser_profile_client.py connection \
+            --account-id "${{ vars.AVITO_BROWSER_ACCOUNT_ID }}" \
+            ${{ vars.AVITO_BROWSER_PROFILE_ID != '' && format('--profile-id {0}', vars.AVITO_BROWSER_PROFILE_ID) || '' }} \
+            --mint-session --session-minutes 60 --write-env
+
+      - name: Live run
+        if: env.READY == 'true'
+        # AVITO_PROXY is deliberately NOT exported here: an exported variable
+        # outranks .env, and the base login would replace the minted session
+        # the endpoint was built with.
+        env:
+          TWOCAPTCHA_KEY: ${{ secrets.TWOCAPTCHA_KEY }}
+        run: |
+          # GitHub runs `run:` under `bash -e`; capture the exit code first.
+          set +e
+          python3 playwright_scraper.py --mode listing \
+            --url https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAkS0wA3OqzmwwQ2I_Dc \
+            --pages 3 --out canary --format both --verbose
+          echo "rc=$?" >> "$GITHUB_ENV"
+          set -e
+
+      - name: Assert the data, not just the exit code
+        if: env.READY == 'true'
+        # THE SHIPPED CHECK, not an inline copy (CLAUDE.md §11).
+        run: |
+          echo "exit code from the run: $rc"
+          python3 .github/ci_checks.py --run-check --sample-check --output-prefix canary
+
+      - name: Remove the minted credentials
+        if: always()
+        run: rm -f .env
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canary-output
+          path: |
+            canary.json
+            canary.csv
+            canary*.meta.json
+          if-no-files-found: ignore

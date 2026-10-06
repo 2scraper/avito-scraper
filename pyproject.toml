@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "avito-scraper"
+version = "1.0.0"
+description = "avito.ru listing, item and seller scraper (Playwright, Selenium, Puppeteer, or the Scraping Browser API over CDP) — GeeTest firewall solving, proxies, fingerprints"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "2scraper" }]
+keywords = ["avito", "classifieds", "web-scraping", "scraper",
+            "price-monitoring", "playwright", "selenium", "puppeteer",
+            "captcha-solver", "geetest", "scraping-browser", "proxy", "fingerprints"]
+# NOTE no "License :: OSI Approved :: …" classifier. PEP 639 supersedes those
+# with the `license` expression above, and modern setuptools REFUSES a build
+# that carries both.
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+]
+dependencies = ["beautifulsoup4>=4.12", "requests>=2.31"]
+
+[project.urls]
+Homepage = "https://2captcha.com"
+Repository = "https://github.com/2scraper/avito-scraper"
+Changelog = "https://github.com/2scraper/avito-scraper/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+playwright = ["playwright>=1.44"]
+selenium = ["selenium>=4.15"]
+puppeteer = ["pyppeteer>=1.0.2"]
+
+[project.scripts]
+avito-scraper = "playwright_scraper:main"
+
+# A flat collection of top-level scripts, so setuptools is told explicitly
+# rather than asked to guess among this many modules.
+[tool.setuptools]
+py-modules = [
+    "browser_bridge", "captcha_solver", "diff_runs", "env_config",
+    "fingerprint_client", "output_writer", "page_flow", "playwright_scraper",
+    "product_parser", "proxy_forwarder", "proxy_pool", "puppeteer_scraper",
+    "selenium_scraper",
+]
