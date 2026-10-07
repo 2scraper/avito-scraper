@@ -69,7 +69,7 @@ _PLACEHOLDERS = {
 # cause. This exact defect shipped in this family's etsy-scraper and
 # a sibling repo (both of which use braced placeholders) and was absent
 # from amazon-scraper/a sibling repo only because neither of those uses
-# them -- see CLAUDE.md §17. Any `{...}` left in a value is unset here,
+# them -- see 2scraper family rule. Any `{...}` left in a value is unset here,
 # named rather than quoted in the warning, since the value can be a
 # credentialled URL.
 _BRACED_PLACEHOLDER_RE = re.compile(r"\{[^{}]+\}")

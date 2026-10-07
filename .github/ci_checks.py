@@ -2,14 +2,15 @@
 """
 CI checks that are too long to live inside the workflow YAML.
 
-A workflow step CALLS these; it never re-implements them (family CLAUDE.md
-§11). A heredoc in YAML is a check nobody runs locally and nobody notices
+A workflow step CALLS these; it never re-implements them (a 2scraper family
+rule). A heredoc in YAML is a check nobody runs locally and nobody notices
 going stale. Run any of these from the repo root:
 
     python .github/ci_checks.py --help-check
     python .github/ci_checks.py --sample-check
     python .github/ci_checks.py --secret-check
     python .github/ci_checks.py --run-check --output-prefix live/canary
+    python .github/ci_checks.py --wheel-check
     python .github/ci_checks.py --all
 
 Each prints what it looked at and exits non-zero on failure.
@@ -174,8 +175,73 @@ def run_check(prefix="sample_output"):
     return failed
 
 
+WHEEL_PROBE = r"""
+import sys, product_parser as P, output_writer as O, page_flow
+problems = []
+rules = P._robots_rules()
+if len(rules) < 10:
+    problems.append('robots rules in the installed wheel: %d' % len(rules))
+for url, allowed in (('https://www.avito.ru/moskva?f=x', False),
+                     ('https://www.avito.ru/moskva/telefony?s=104', False),
+                     ('https://www.avito.ru/moskva/telefony?p=2', True)):
+    if P.robots_verdict(url)[0] is not allowed:
+        problems.append('robots verdict for %s is not %s' % (url, allowed))
+if O.SOURCE_DEFAULT != 'avito.ru':
+    problems.append('source is %r' % O.SOURCE_DEFAULT)
+if P.page_url('https://www.avito.ru/moskva/telefony', 3) != 'https://www.avito.ru/moskva/telefony?p=3':
+    problems.append('pagination convention did not survive packaging')
+if not page_flow.should_solve('captcha'):
+    problems.append('state policy did not survive packaging')
+print('\n'.join(problems))
+sys.exit(1 if problems else 0)
+"""
+
+
+def wheel_check(with_playwright=True):
+    """Build the wheel, install it OUTSIDE the checkout, and use it as a user
+    would. v1.0.0 passed an import-only version of this while its wheel
+    shipped no robots rules (every URL allowed) and its console command died
+    on a missing playwright (external audit, 2026-10-07).
+    """
+    import os
+    import tempfile
+    failed = []
+    with tempfile.TemporaryDirectory() as tmp:
+        dist = os.path.join(tmp, "dist")
+        venv = os.path.join(tmp, "venv")
+        step = subprocess.run([sys.executable, "-m", "pip", "wheel", "--no-deps", "-q",
+                               "-w", dist, str(REPO)], capture_output=True, text=True)
+        if step.returncode:
+            return ["wheel build failed: " + step.stderr[-400:]]
+        subprocess.run([sys.executable, "-m", "venv", venv], check=True)
+        py = os.path.join(venv, "bin", "python")
+        cli = os.path.join(venv, "bin", "avito-scraper")
+        wheel = os.path.join(dist, os.listdir(dist)[0])
+        subprocess.run([py, "-m", "pip", "install", "-q", wheel], check=True)
+        probe = subprocess.run([py, "-c", WHEEL_PROBE], capture_output=True, text=True, cwd=tmp)
+        if probe.returncode:
+            failed += ["installed wheel: " + l for l in probe.stdout.splitlines() + [probe.stderr[-300:]] if l]
+        else:
+            print("ok       installed wheel: robots rules, verdicts, conventions")
+        bare = subprocess.run([cli, "--help"], capture_output=True, text=True, cwd=tmp)
+        if bare.returncode != 2 or "avito-scraper[playwright]" not in bare.stderr:
+            failed.append("console script without playwright: rc=%s, %r"
+                          % (bare.returncode, (bare.stderr or bare.stdout)[-200:]))
+        else:
+            print("ok       avito-scraper without playwright: says what to install (exit 2)")
+        if with_playwright:
+            subprocess.run([py, "-m", "pip", "install", "-q", wheel + "[playwright]"], check=True)
+            full = subprocess.run([cli, "--help"], capture_output=True, text=True, cwd=tmp)
+            if full.returncode != 0 or "--mode" not in full.stdout:
+                failed.append("console script with playwright: rc=%s, %r"
+                              % (full.returncode, full.stderr[-200:]))
+            else:
+                print("ok       avito-scraper[playwright]: --help runs")
+    return failed
+
+
 CHECKS = {"help": help_check, "sample": sample_check, "secret": secret_check,
-          "run": run_check}
+          "run": run_check, "wheel": wheel_check}
 
 
 def main():
@@ -193,12 +259,14 @@ def main():
                              "(use with --output-prefix)")
     parser.add_argument("--secret-check", action="store_true",
                         help="No credentials committed anywhere")
+    parser.add_argument("--wheel-check", action="store_true",
+                        help="Build the wheel, install it outside the checkout, use it")
     parser.add_argument("--all", action="store_true",
-                        help="help + sample + secret (the run check needs a live run)")
+                        help="help + sample + secret (run needs a live run; wheel is slow)")
     args = parser.parse_args()
 
     selected = [name for name in CHECKS
-                if (args.all and name != "run") or getattr(args, f"{name}_check")]
+                if (args.all and name not in ("run", "wheel")) or getattr(args, f"{name}_check")]
     if not selected:
         parser.error("pick at least one check, or --all")
     failures = []

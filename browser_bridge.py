@@ -71,7 +71,7 @@ import output_writer
 import page_flow
 import product_parser as P
 import proxy_pool
-from output_writer import (EXIT_REMOTE_API_ERROR, Product, finish_run,
+from output_writer import (EXIT_CRASH, EXIT_REMOTE_API_ERROR, Product, finish_run,
                            scope_fingerprint)
 
 logger = logging.getLogger("avito")
@@ -93,7 +93,7 @@ class BridgeError(RuntimeError):
     exit (measured once on a local run), a locked profile, a 407 on the
     tunnel: transport faults, not refusals. They map to exit 5, never 3 —
     exit 3 sends the reader to the anti-bot problem when the answer is "run
-    it again" (CLAUDE.md §20).
+    it again" (2scraper family rule).
     """
 
 
@@ -186,7 +186,7 @@ def solve_wall(driver, args, url: str, html: str, facts: Dict[str, Any], log=Non
     """Rungs 1 and 2 on a captcha wall. Returns fresh HTML if it cleared.
 
     Every solver failure is a WARNING: the run goes on and reports exit 3 if
-    the page stays walled (CLAUDE.md §8).
+    the page stays walled (2scraper family rule).
     """
     if getattr(args, "solve_captcha", "when-blocked") == "never":
         return None
@@ -255,7 +255,7 @@ def fetch_page(driver, args, url: str, mode: str, facts: Dict[str, Any], log=Non
             status = driver.navigate(url)
             break
         except Exception as exc:  # noqa: BLE001
-            # A transport fault: same exit, another try (CLAUDE.md §8 — a
+            # A transport fault: same exit, another try (2scraper family rule — a
             # timeout and a refusal want opposite responses).
             message = mask_text(str(exc)).splitlines()[0][:200] if str(exc) else ""
             if attempt == attempts:
@@ -297,7 +297,7 @@ def fetch_page(driver, args, url: str, mode: str, facts: Dict[str, Any], log=Non
 def fetch_with_rotation(driver, args, url: str, mode: str, facts, log=None) -> Dict[str, Any]:
     """`fetch_page`, plus rung 3: a fresh exit for a page that stayed walled.
 
-    A rotation is a FRESH BROWSER (CLAUDE.md §8): cookies a firewall issued to
+    A rotation is a FRESH BROWSER (2scraper family rule): cookies a firewall issued to
     exit A replayed from exit B are a stronger signal than either alone.
     """
     retries = getattr(args, "proxy_block_retries", 0) or 0
@@ -306,7 +306,7 @@ def fetch_with_rotation(driver, args, url: str, mode: str, facts, log=None) -> D
             result = fetch_page(driver, args, url, mode, facts, log=log)
         except BridgeError as exc:
             # A DEAD EXIT wants a different exit, not another try at the same
-            # one (CLAUDE.md §8). Measured 2026-10-06: a session-pinned
+            # one (2scraper family rule). Measured 2026-10-06: a session-pinned
             # residential exit went away inside its sessTime and every
             # request through it failed with ERR_CONNECTION_CLOSED /
             # SSL_ERROR_SYSCALL, while a fresh session on the same credential
@@ -444,12 +444,40 @@ def run(args, driver) -> int:
     seen: set = set()
     start_url = urls[0]
 
+    pages_requested = args.pages if args.mode == "listing" else len(urls)
+
+    def failed(code: int, exc: BaseException, stop_reason: str) -> int:
+        """EVERY ending writes the attempt sidecar — a run that died before
+        finish_run used to leave the previous attempt's metadata in place, so
+        a scheduler read yesterday's `complete` as today's result."""
+        facts["error_class"] = type(exc).__name__
+        facts["error_message"] = mask_text(str(exc))[:500]
+        meta = output_writer.run_meta(
+            status="failed", stop_reason=stop_reason, pages_requested=pages_requested,
+            pages_completed=facts["pages_completed"], start_url=start_url,
+            final_url=facts.get("final_url", start_url), products=0,
+            pages_failed=facts["failed_pages"], mode=args.mode,
+            scope=scope_fingerprint(start_url, args.mode, pages_requested, args.max_products))
+        meta.update(run_id=run_id, started_at=started_at, blocked=False,
+                    exit_code=code, data_updated=False, transport_facts=facts)
+        try:
+            output_writer.write_attempt_meta(args.out, meta)
+        except OSError as write_exc:
+            print("[!] could not write the attempt metadata: %s" % write_exc, file=sys.stderr)
+        return code
+
+    import uuid
+    from datetime import datetime, timezone
+    run_id = uuid.uuid4().hex[:12]
+    started_at = datetime.now(timezone.utc).isoformat()
+
     try:
         driver.start()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — a browser that never started is transport
         print("could not start %s: %s: %s"
               % (driver.name, type(exc).__name__, mask_text(str(exc))[:300]), file=sys.stderr)
-        return EXIT_REMOTE_API_ERROR
+        _stop(driver)
+        return failed(EXIT_REMOTE_API_ERROR, exc, "transport_error")
 
     try:
         if args.mode == "listing":
@@ -459,14 +487,18 @@ def run(args, driver) -> int:
         else:
             rows, extra_rows = _run_seller(driver, args, start_url, facts, log)
     except BridgeError as exc:
+        # The site was never reached: exit 5 (2scraper family rule).
         print("[!] %s" % exc, file=sys.stderr)
-        facts["transport_error"] = str(exc)
         _stop(driver)
-        return EXIT_REMOTE_API_ERROR
+        return failed(EXIT_REMOTE_API_ERROR, exc, "transport_error")
     except Exception as exc:  # noqa: BLE001
-        print("[!] %s: %s" % (type(exc).__name__, mask_text(str(exc))[:300]), file=sys.stderr)
+        # NOT a transport fault: a parser bug, a TypeError, a file error. It
+        # used to be reported as exit 5, indistinguishable from a dead exit,
+        # with the traceback thrown away. Exit 1, traceback kept (masked).
+        import traceback
+        print(mask_text(traceback.format_exc()), file=sys.stderr)
         _stop(driver)
-        return EXIT_REMOTE_API_ERROR
+        return failed(EXIT_CRASH, exc, "crash")
     finally:
         _stop(driver)
 
@@ -479,7 +511,6 @@ def run(args, driver) -> int:
         output_writer.save(extra_rows, args.out + "_listings", args.format,
                            allow_empty=False, row_cls=Product)
 
-    pages_requested = args.pages if args.mode == "listing" else len(urls)
     return finish_run(
         rows, args.out, args.format, args.allow_empty,
         blocked=facts["blocked"],
@@ -540,7 +571,7 @@ def _run_listing(driver, args, url, facts, seen, log) -> List[Product]:
         facts["pages_completed"] = page
         log("  %s: %d rows (%d new, %d total)" % (state, len(page_rows), len(fresh), len(rows)))
 
-        # The terminating condition is DATA, never a selector (CLAUDE.md §7).
+        # The terminating condition is DATA, never a selector (2scraper family rule).
         if not page_rows or not fresh:
             log("  page %d added no new items — end of listing." % page)
             facts["pagination_exhausted"] = True

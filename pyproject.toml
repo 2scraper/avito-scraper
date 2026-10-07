@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avito-scraper"
-version = "1.0.0"
+version = "1.0.1"
 description = "avito.ru listing, item and seller scraper (Playwright, Selenium, Puppeteer, or the Scraping Browser API over CDP) — GeeTest firewall solving, proxies, fingerprints"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -35,14 +35,14 @@ selenium = ["selenium>=4.15"]
 puppeteer = ["pyppeteer>=1.0.2"]
 
 [project.scripts]
-avito-scraper = "playwright_scraper:main"
+avito-scraper = "avito_cli:main"
 
 # A flat collection of top-level scripts, so setuptools is told explicitly
 # rather than asked to guess among this many modules.
 [tool.setuptools]
 py-modules = [
-    "browser_bridge", "captcha_solver", "diff_runs", "env_config",
+    "avito_cli", "browser_bridge", "captcha_solver", "diff_runs", "env_config",
     "fingerprint_client", "output_writer", "page_flow", "playwright_scraper",
-    "product_parser", "proxy_forwarder", "proxy_pool", "puppeteer_scraper",
+    "product_parser", "proxy_forwarder", "proxy_pool", "puppeteer_scraper", "robots_snapshot",
     "selenium_scraper",
 ]

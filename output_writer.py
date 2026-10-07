@@ -13,7 +13,7 @@ Three kinds of row, one per --mode
 The first nine `Product` columns are the family prefix — `source`,
 `scraped_at`, `url`, `sku`, `title`, `image_url`, `price`, `currency`,
 `category` — byte-identical to every sibling repo, so a consumer written
-against another repo in this family reads them unchanged (CLAUDE.md §9).
+against another repo in this family reads them unchanged (2scraper family rule).
 `Item` extends `Product`, so its prefix is the same by construction.
 
 `sku` is Avito's item id (`8245354778`): the trailing digits of the item
@@ -238,6 +238,9 @@ def write_csv(rows: Sequence[Any], path: str, row_cls: Type = Product) -> None:
 
 EXIT_NO_PRODUCTS = 4
 
+# An unexpected exception — a bug, not the site and not the transport.
+EXIT_CRASH = 1
+
 # Exit code for a run blocked by a bot-check/challenge page before parsing
 # even started.
 EXIT_BLOCKED = 3
@@ -249,7 +252,7 @@ EXIT_PARTIAL = 6
 # -- the Fingerprint API rejecting a request (bad key, bad --tags, rate
 # limit), or a Scraping Browser CDP connection failing (e.g. profile_locked)
 # -- as opposed to EXIT_BLOCKED (the TARGET SITE refusing a page) or an
-# uncaught crash (1). Per CLAUDE.md's family exit-code contract ("5" =
+# uncaught crash (1). Per the 2scraper family exit-code contract ("5" =
 # "remote API error"). Deliberately NOT what a captcha-solve failure gets:
 # per that same document's captcha section, a solver error is a WARNING that
 # lets the run continue (see captcha_solver.py and each engine's
@@ -311,11 +314,17 @@ def write_attempt_meta(out_prefix: str, meta: dict) -> str:
     return write_run_meta(out_prefix, meta, suffix=ATTEMPT_META_SUFFIX)
 
 
-def schema_version() -> str:
-    """A short fingerprint of the row schema, so a diff can refuse to compare
-    a run written before a column changed with one written after."""
-    names = ",".join(f.name for f in fields(Product))
-    return hashlib.sha256(names.encode()).hexdigest()[:12]
+def schema_version(row_cls: Type = Product) -> str:
+    """A short fingerprint of ONE row schema — names, order and declared
+    types — so a diff can refuse to compare a run written before a column
+    changed with one written after.
+
+    Per row class: the first version hashed `Product`'s field names only, so
+    an `Item`-only column change, or a type change, left it unchanged
+    (external audit, 2026-10-07).
+    """
+    spec = ",".join("%s:%s" % (f.name, f.type) for f in fields(row_cls))
+    return hashlib.sha256((row_cls.__name__ + "|" + spec).encode()).hexdigest()[:12]
 
 
 def scope_fingerprint(start_url: Optional[str] = None, mode: Optional[str] = None,
@@ -338,7 +347,7 @@ def scope_fingerprint(start_url: Optional[str] = None, mode: Optional[str] = Non
         "mode": mode,
         "pages": pages,
         "max_products": max_products,
-        "schema_version": schema_version(),
+        "schema_version": schema_version(ROW_CLASS_BY_MODE.get(mode, Product)),
     }
 
 
@@ -369,7 +378,7 @@ def save(rows: Sequence[Any], out_prefix: str, fmt: str,
     """Write JSON/CSV and return a process exit code.
 
     On zero rows, nothing is written at all unless `allow_empty` — see the
-    family invariant in CLAUDE.md §8: a run that finds nothing must not
+    2scraper family rule: a run that finds nothing must not
     silently replace yesterday's good output with an empty file.
     """
     if not rows and not allow_empty:

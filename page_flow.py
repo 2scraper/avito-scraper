@@ -3,7 +3,7 @@ page_flow.py
 ------------
 avito.ru's page-state policy, shared by all three engines as DATA, so an
 engine cannot quietly disagree with its twins about whether a page is worth
-waiting for, paying for or rotating away from (CLAUDE.md §1).
+waiting for, paying for or rotating away from (2scraper family rule).
 
 What a page can answer (product_parser.detect_page_state)
 --------------------------------------------------------
@@ -56,7 +56,7 @@ AUTOSOLVE_BUDGET_MS = 25000
 # Readiness anchors per mode — what "the page has painted" means.
 # A listing is ready when MORE than one card is present: one match can
 # resolve on an unrelated card-shaped node long before the grid paints
-# (CLAUDE.md §5). An item page is ready when its hydration payload is in.
+# (2scraper family rule). An item page is ready when its hydration payload is in.
 # A seller page is ready when the profile block is.
 READY_SELECTORS = {
     "listing": '[data-marker="item"][data-item-id]',
@@ -80,7 +80,7 @@ def should_retry(state: str) -> bool:
 
 def should_rotate(state: str) -> bool:
     """Whether this state means "try a different address", not "try again"
-    (CLAUDE.md §8: a timeout and a refusal want opposite responses)."""
+    (2scraper family rule: a timeout and a refusal want opposite responses)."""
     return STATE_POLICY.get(state, {}).get("rotate", False)
 
 

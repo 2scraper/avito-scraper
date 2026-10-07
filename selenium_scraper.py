@@ -35,7 +35,7 @@ import proxy_pool
 from proxy_forwarder import ProxyForwarder
 
 # Module level, so the offline suite can tell "engine absent" from "engine
-# broken" (CLAUDE.md §10).
+# broken" (2scraper family rule).
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By

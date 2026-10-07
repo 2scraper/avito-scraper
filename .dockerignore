@@ -1,9 +1,13 @@
 .git/
 .github/
+# EVERY .env variant: a credential baked into an image is published to
+# everyone who can pull it.
 .env
+.env.*
+*.bak
 # A downloaded proxy list is a credential file, one login and password
 # per line. The Dockerfile COPYs an explicit list rather than `COPY . .`,
-# so this cannot get in today -- but a defence that depends on nobody ever
+# so this cannot get in today — but a defence that depends on nobody ever
 # writing `COPY . .` is not a defence. Same narrow glob as .gitignore.
 proxylist*.txt
 *.log
@@ -16,7 +20,13 @@ __pycache__/
 .venv/
 venv/
 env/
-bershka_products.*
-canary_run.*
+# Scrape output, dumps and research captures.
+live/
+recon/
+captures/
+canary.*
+canary*.meta.json
+*.latest_attempt.meta.json
 *_debug.html
 *_debug.png
+*_p[0-9]*.html

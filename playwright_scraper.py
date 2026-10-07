@@ -23,7 +23,7 @@ import proxy_pool
 
 # Imported at MODULE level on purpose: the offline suite must be able to skip
 # this engine when Playwright is absent, and it can only tell that if the
-# import fails here rather than deep inside start() (CLAUDE.md §10).
+# import fails here rather than deep inside start() (2scraper family rule).
 from playwright.sync_api import sync_playwright
 
 
@@ -47,7 +47,7 @@ class PlaywrightDriver:
         if over_cdp:
             # Wrapped so a failure cannot print the endpoint, which carries a
             # password. Playwright repeats it five times in one error — the
-            # message plus a four-line call log (CLAUDE.md §8).
+            # message plus a four-line call log (2scraper family rule).
             try:
                 self._browser = self._pw.chromium.connect_over_cdp(
                     self.args.cdp_endpoint, timeout=self.args.timeout * 1000)
@@ -69,7 +69,7 @@ class PlaywrightDriver:
             self._browser = self._pw.chromium.launch(**launch)
             # No user agent and no fingerprint: a hardcoded UA drifts from the
             # installed Chromium, and over CDP the remote browser brings its
-            # own (CLAUDE.md §8).
+            # own (2scraper family rule).
             self._context = self._browser.new_context(locale="ru-RU")
             self._page = self._context.new_page()
         self._page.set_default_timeout(self.args.timeout * 1000)

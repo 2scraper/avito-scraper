@@ -43,7 +43,7 @@ jobs:
           pytest -q
 
       - name: Every CLI answers --help
-        # THE SHIPPED CHECK, not a copy of it (CLAUDE.md §11). Engine
+        # THE SHIPPED CHECK, not a copy of it (a 2scraper family rule). Engine
         # libraries are not installed here, so those entry points report
         # skipped rather than failed.
         run: python3 .github/ci_checks.py --help-check
@@ -55,29 +55,13 @@ jobs:
         run: python env_config.py
 
       - name: The built wheel installs and works outside the checkout
-        # A flat `py-modules` collection is easy to get wrong, and a wheel
-        # that imports in the source tree but not once installed fails only
-        # on delivery. Installed into its own venv, exercised from /tmp.
-        run: |
-          python -m pip install --quiet build
-          python -m build --wheel
-          python -m venv /tmp/wheelcheck
-          /tmp/wheelcheck/bin/pip install --quiet dist/*.whl
-          cd /tmp
-          /tmp/wheelcheck/bin/python -c "
-          import sys, output_writer as O, page_flow, product_parser as P, captcha_solver, proxy_forwarder
-          problems = []
-          if O.SOURCE_DEFAULT != 'avito.ru':
-              problems.append('source is %r' % O.SOURCE_DEFAULT)
-          u = 'https://www.avito.ru/moskva/telefony'
-          if P.page_url(u, 3) != u + '?p=3':
-              problems.append('pagination convention did not survive packaging')
-          if not page_flow.should_solve('captcha'):
-              problems.append('state policy did not survive packaging')
-          for p in problems:
-              print('::error::' + p)
-          print('installed wheel: %d problem(s)' % len(problems))
-          sys.exit(1 if problems else 0)"
+        # THE SHIPPED CHECK. Builds the wheel, installs it into a fresh venv
+        # outside the checkout and uses it: robots rules present and
+        # refusing, the console command without playwright says what to
+        # install, and with it answers --help. v1.0.0 passed an import-only
+        # inline version of this while its wheel allowed every URL and its
+        # command died on a missing playwright (external audit, 2026-10-07).
+        run: python3 .github/ci_checks.py --wheel-check
 
       - name: No credentials committed
         # THE SHIPPED CHECK — one scanner, shared with the git hooks (§21).
@@ -90,7 +74,7 @@ jobs:
     #
     # ONE VENV PER ENGINE: the engines' pins are mutually unsatisfiable
     # (pyee, urllib3), and installed together pip may resolve the conflict by
-    # picking a release nobody uses (CLAUDE.md §11).
+    # picking a release nobody uses (a 2scraper family rule).
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -168,7 +152,8 @@ jobs:
           import importlib, sys
           mods = ['browser_bridge','captcha_solver','diff_runs','env_config',
                   'fingerprint_client','output_writer','page_flow',
-                  'playwright_scraper','product_parser','proxy_forwarder','proxy_pool']
+                  'playwright_scraper','product_parser','proxy_forwarder','proxy_pool',
+                  'robots_snapshot']
           bad = []
           for m in mods:
               try:

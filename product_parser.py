@@ -1,7 +1,7 @@
 """
 product_parser.py
 -----------------
-Everything this repo knows about avito.ru's markup lives here (CLAUDE.md §1).
+Everything this repo knows about avito.ru's markup lives here (2scraper family rule).
 The engines and `browser_bridge.py` decide WHEN to fetch; this module decides
 WHAT a fetched page says.
 
@@ -171,25 +171,25 @@ def _robots_rules() -> List[Tuple[str, str]]:
     global _ROBOTS
     if _ROBOTS is not None:
         return _ROBOTS
-    import os
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "robots.snapshot.txt")
+    from robots_snapshot import ROBOTS_TXT
     rules: List[Tuple[str, str]] = []
     in_star = False
-    try:
-        with open(path, encoding="utf-8") as handle:
-            for raw in handle:
-                line = raw.split("#", 1)[0].strip()
-                if not line or ":" not in line:
-                    continue
-                key, value = (s.strip() for s in line.split(":", 1))
-                key = key.lower()
-                if key == "user-agent":
-                    in_star = value == "*"
-                elif in_star and key in ("allow", "disallow") and value:
-                    rules.append((key, value))
-    except OSError:
-        rules = []
+    for raw in ROBOTS_TXT.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or ":" not in line:
+            continue
+        key, value = (s.strip() for s in line.split(":", 1))
+        key = key.lower()
+        if key == "user-agent":
+            in_star = value == "*"
+        elif in_star and key in ("allow", "disallow") and value:
+            rules.append((key, value))
+    # FAIL CLOSED. The first release read the snapshot from a file the wheel
+    # did not ship, got zero rules and allowed every URL. An empty rule set
+    # is never a valid reading of avito.ru's robots.txt.
+    if not any(d == "disallow" for d, _ in rules):
+        raise RuntimeError("robots snapshot yielded no Disallow rules — refusing "
+                           "to treat every URL as allowed")
     _ROBOTS = rules
     return rules
 
@@ -277,11 +277,11 @@ def detect_page_state(html: str, status: Optional[int] = None,
         blocked    a refusal with no puzzle in it (403/451, or nothing at all)
         unknown    served, not yet painted, nothing recognisable
 
-    Ordered by how much each signal PROVES (CLAUDE.md §17): content markers
+    Ordered by how much each signal PROVES (2scraper family rule): content markers
     first, the wall's own title next, and only then the structural guesses.
     Deliberately no `captcha` substring test: the Browser API extension
     injects `chrome-extension://…/captcha/*` scripts into every page it
-    loads (CLAUDE.md §8, §19).
+    loads (2scraper family rule).
     """
     html = html or ""
     kind = page_kind(url) if url else None
@@ -341,7 +341,7 @@ def parse_number(text: Any) -> Optional[float]:
 
 def count_before_word(text: Optional[str]) -> Optional[int]:
     """`'1 524 отзыва'` -> 1524. Reads the number BEFORE the word, never every
-    digit in the string (CLAUDE.md §10: a `review_count` once came out as
+    digit in the string (2scraper family rule: a `review_count` once came out as
     445279961 by stripping every digit out of an aria-label)."""
     if not text:
         return None

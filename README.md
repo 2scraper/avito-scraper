@@ -18,6 +18,13 @@ actually needs.
 [![engines](https://img.shields.io/badge/engines-Playwright%20%7C%20Selenium%20%7C%20pyppeteer%20%7C%20CDP-informational)](#engines)
 [![needs a Russian exit](https://img.shields.io/badge/needs-a%20Russian%20exit%20%2B%20a%20browser-orange)](#the-one-thing-you-actually-need)
 
+> **What the canary badge means.** The daily canary scrapes avito.ru only when
+> the repository holds the secrets for a Russian exit and a captcha key. This
+> public repository does not, so the canary takes its documented SKIP branch:
+> a green badge here says the workflow is healthy, **not** that avito.ru was
+> scraped today. Each skipped run says so in a warning. The live measurements
+> are in [Measured results](#measured-results), with their dates.
+
 ---
 
 ## The one thing you actually need
@@ -248,7 +255,7 @@ pyppeteer is effectively unmaintained; it is here for parity.
 | Code | Meaning |
 |---|---|
 | `0` | Complete |
-| `1` | Crash |
+| `1` | Crash — an unexpected exception: a bug, not the site and not the transport (traceback printed, credentials masked) |
 | `2` | Bad usage — wrong host, wrong `--mode` for the URL, a robots-disallowed URL |
 | `3` | Blocked — the firewall stayed up after every rung |
 | `4` | Zero results — including a search with no matches |
@@ -260,7 +267,7 @@ the answer is "run it again" or "rebuild the endpoint", not the firewall.
 
 A run that finds nothing writes nothing — last night's output is not replaced
 with `[]` (`--allow-empty` is the opt-out). `<out>.meta.json` describes the
-data beside it; `<out>.latest_attempt.meta.json` is written on every run and
+data beside it; `<out>.latest_attempt.meta.json` is written on EVERY ending — success, block, transport error or crash, with `exit_code` and `error_class` — and
 records `transport_facts`: walls met, which rung cleared each, every solve
 with its time and cost, rotations, and auto-solve events.
 
@@ -349,7 +356,7 @@ details, and does not message sellers. When avito.ru's firewall presents a
 captcha, the scraper solves it the way a visitor would — through the page's
 own form — with a solve you pay 2Captcha for.
 
-`robots.txt` is respected: the snapshot is in `robots.snapshot.txt`, and URLs
+`robots.txt` is respected: the snapshot is in `robots_snapshot.py`, and URLs
 it disallows are refused before any request is made.
 
 The firewall exists because of request volume. Default `--delay` is 2 seconds

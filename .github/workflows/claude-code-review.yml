@@ -77,17 +77,20 @@ jobs:
             you can find is a number or a claim that no longer matches the
             code, or a comment that explains a reason the code no longer has.
 
-            A few things specific to this repo worth checking: every price is
-            in EUR and every row is a DOM reading (there is no JSON-LD on
-            this site to cross-check against — see output_writer.py and
-            diff_runs.py); there are two row schemas, Player and Transfer
-            (output_writer.py), and a change to one should not silently affect
-            the other; `page` and `row_index` must stay unique across a
-            paginated run (see product_parser.py and the tokopedia lesson in
-            CLAUDE.md); and this site's listing pagination is robots-DISALLOWED,
-            so product_parser.page_url() returning its input unchanged is a
-            deliberate decision, not a stub — a change that makes it
-            construct a URL deserves extra scrutiny.
+            A few things specific to this repo (avito.ru) worth checking:
+            `price` must stay the DISPLAYED price — Avito's bare price fields
+            are the pre-discount figure (product_parser.py docstring); a
+            listing page arrives in two renderings, DOM and an embedded JSON
+            state, and `price_source` says which, so diff_runs.py must not
+            report a rendering change as a price change; there are three row
+            schemas, Product / Item / Seller (output_writer.py), and Item must
+            keep Product's column prefix; `page` and `position` must stay
+            unique across a paginated run; a captcha solve must go through the
+            browser's own proxy (captcha_solver.py — a token solved from
+            another IP is rejected); a transport fault is exit 5, never 3;
+            phone numbers, IMEI and a private seller's placeholder name must
+            never reach a row; and a URL robots_snapshot.py disallows must be
+            refused before any request.
 
             Also worth flagging: a check that cannot fail, an error path that
             swallows a failure silently, a credential that could reach a

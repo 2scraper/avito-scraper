@@ -32,7 +32,7 @@ the new price alone. Two runs a week apart that happened to get different
 renderings would otherwise report every discounted item as "original_price
 69989 -> None" — our instrument changing, not the item. So when the two rows
 were read differently, the fields only one rendering states are not
-compared, and a price difference goes in its own bucket (CLAUDE.md §8).
+compared, and a price difference goes in its own bucket (2scraper family rule).
 
 A run is also refused against a run of a DIFFERENT listing (another city or
 category, from the sidecar's `scope.listing`): every row would read as added
@@ -168,11 +168,19 @@ def _check_comparable(args) -> bool:
     problems = []
     modes = {}
     listings = {}
+    schemas = {}
     for label, path in (("--old", args.old), ("--new", args.new)):
         status, meta = _run_status(path)
         if status is None:
+            # No readable sidecar means no proof the run was complete, or of
+            # its mode and scope — exactly what this check exists to prove.
+            # It used to be skipped, so two bare JSON files compared freely.
+            problems.append(
+                f"{label} ({path}) has no readable .meta.json beside it, so "
+                f"nothing shows it was complete or what it covered.")
             continue
         scope = (meta or {}).get("scope") or {}
+        schemas[label] = scope.get("schema_version")
         if scope.get("listing"):
             # The page count is part of what a listing run COVERED: page 3
             # of one run is simply absent from a 2-page run.
@@ -198,6 +206,10 @@ def _check_comparable(args) -> bool:
         problems.append(
             f"the two runs covered different listings or page counts ({listings}): "
             f"rows outside the overlap would read as added or removed.")
+    if len(set(schemas.values())) > 1:
+        problems.append(
+            f"the two runs were written by different row schemas ({schemas}): "
+            f"a renamed or retyped column would read as a change on every row.")
     if not problems:
         return True
 

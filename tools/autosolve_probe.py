@@ -6,7 +6,7 @@ Each iteration clears the profile's cookies (so the firewall is met again),
 arms `Captcha.setAutoSolve`, opens the URL, presses «Продолжить» if the wall
 shows it, and records every `Captcha.*` event, the GeeTest requests and the
 outcome. `--no-autosolve` is the CONTROL: the same steps with nothing solving,
-so a wall that expires on its own is not mistaken for a solve (CLAUDE.md §19).
+so a wall that expires on its own is not mistaken for a solve (2scraper family rule).
 
     python3 tools/autosolve_probe.py --iterations 3
     python3 tools/autosolve_probe.py --iterations 3 --no-autosolve
@@ -16,7 +16,7 @@ Measured 2026-10-06: 0 of 3 cleared with auto-solve (`Captcha.detected`, then
 
 Credentials come from .env (AVITO_CDP_ENDPOINT); nothing secret is printed.
 ONE connection per iteration, always closed: a profile allows one live
-connection, and an unclosed one holds it (CLAUDE.md §20).
+connection, and an unclosed one holds it (2scraper family rule).
 """
 
 from __future__ import annotations
