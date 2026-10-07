@@ -43,7 +43,8 @@ jobs:
       - name: Explain the skip
         if: env.READY != 'true'
         run: |
-          echo "::notice::Skipped: needs secrets TWOCAPTCHA_KEY and AVITO_PROXY and the"
+          echo "::warning::LIVE RUN SKIPPED — this green run proves the workflow is healthy, NOT that avito.ru was scraped."
+          echo "::notice::Needs secrets TWOCAPTCHA_KEY and AVITO_PROXY and the"
           echo "::notice::variable AVITO_BROWSER_ACCOUNT_ID. A GitHub runner is not a"
           echo "::notice::Russian residential address; a live run from here without the"
           echo "::notice::Scraping Browser would be red every day regardless of the code."
@@ -87,7 +88,7 @@ jobs:
 
       - name: Assert the data, not just the exit code
         if: env.READY == 'true'
-        # THE SHIPPED CHECK, not an inline copy (CLAUDE.md §11).
+        # THE SHIPPED CHECK, not an inline copy (a 2scraper family rule).
         run: |
           echo "exit code from the run: $rc"
           python3 .github/ci_checks.py --run-check --sample-check --output-prefix canary

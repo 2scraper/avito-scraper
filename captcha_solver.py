@@ -21,7 +21,7 @@ and Avito's own image captcha — and the server chooses.
                           token (see below)
 
 These are statements about THIS repo, not about what 2Captcha can solve
-(CLAUDE.md §19).
+(2scraper family rule).
 
 The token is bound to the exit — measured
 -----------------------------------------
@@ -35,7 +35,7 @@ The token is bound to the exit — measured
 So the solve MUST go through the same exit the browser uses. `solve_geetest_v4`
 refuses to build a proxyless task unless asked to, because paying for a
 token the site rejects — and then facing a second captcha — is worse than
-reporting the page unsolved (CLAUDE.md §8: detected != paying).
+reporting the page unsolved (2scraper family rule: detected != paying).
 
 Cost measured: $0.00299 per solve, 10–73 s.
 
@@ -177,7 +177,7 @@ def firewall_response_value(solution: dict) -> str:
 # Submitting through the PAGE'S OWN form rather than calling the verify
 # endpoint ourselves: the form handler adds the `X-Cube` header from
 # `#cubeResult` and does the reload, exactly as it does for a person.
-# Each engine wraps this body in its own dialect (CLAUDE.md §1).
+# Each engine wraps this body in its own dialect (2scraper family rule).
 SUBMIT_JS_BODY = (
     "var inp = document.querySelector('input[name=captcha-response]');"
     "var form = document.querySelector('.js-firewall-form');"

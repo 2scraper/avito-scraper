@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt -r requirements-playwright.tx
 # every invocation, --help included, because nothing ever built it.
 COPY browser_bridge.py captcha_solver.py diff_runs.py env_config.py \
      fingerprint_client.py output_writer.py page_flow.py playwright_scraper.py \
-     product_parser.py proxy_forwarder.py proxy_pool.py robots.snapshot.txt ./
+     product_parser.py proxy_forwarder.py proxy_pool.py robots_snapshot.py ./
 
 ENTRYPOINT ["python3", "playwright_scraper.py"]
 CMD ["--help"]

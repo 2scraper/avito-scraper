@@ -6,6 +6,55 @@ follow SemVer as closely as a CLI toolkit can: a **patch** means fixes, and a
 fix may change a default when the old one was wrong — such a change leads its
 entry in a blockquote.
 
+## [1.0.1] — 2026-10-07
+
+Fixes from an external audit of v1.0.0. Each finding was reproduced before
+it was fixed, and each now has a regression test.
+
+> **Behaviour changes for existing users.**
+> * An **unexpected exception** now exits **1** (crash, traceback printed
+>   with credentials masked). It used to exit 5, the same as a dead exit, so a
+>   parser bug read as a transport fault. Exit 5 is now only a transport fault.
+> * `diff_runs.py` now **refuses** two outputs when either has no readable
+>   `.meta.json`, or when they were written by different row schemas. Pass
+>   `--force` to compare anyway.
+
+### Fixed
+
+* **The installed wheel allowed every URL.** The robots snapshot was a loose
+  `.txt` beside the modules and was not shipped; an installed copy read zero
+  rules. It is now the module `robots_snapshot.py`, and an empty rule set
+  raises instead of allowing everything.
+* **`pip install avito-scraper` gave a command that crashed** with
+  `ModuleNotFoundError: playwright`. The command now goes through a launcher
+  that says to install `avito-scraper[playwright]` (exit 2).
+* **No attempt metadata on a failed start or a crash.**
+  `<out>.latest_attempt.meta.json` is now written on every ending, with
+  `exit_code`, `error_class` and a masked `error_message`.
+* **`schema_version`** now fingerprints the row class of the run's mode
+  (names, order and types), not `Product`'s field names only.
+* Leftovers from the repositories this one was scaffolded from, in
+  `requirements.txt`, `.gitignore`, `.dockerignore` and the Claude review
+  prompt, are gone; the vocabulary check now covers every tracked file.
+  Comments no longer point at an operator file that is not published.
+
+### Changed
+
+* CI builds the wheel, installs it outside the checkout and uses it
+  (`ci_checks.py --wheel-check`): robots verdicts, and the console command
+  with and without the playwright extra.
+* A skipped canary (no secrets — the case for this public repository) now
+  raises a visible warning; README explains what the green badge does and
+  does not prove.
+
+### Not changed, and why
+
+* **The canary still goes green when it skips.** A check that is red every
+  day for want of secrets teaches everyone to ignore checks; the skip is now
+  loud instead.
+* Pinning Actions by SHA, lock files, a `src/` package layout and dropping
+  pyppeteer are larger decisions, left for a minor release.
+
 ## [1.0.0] — 2026-10-06
 
 First release.

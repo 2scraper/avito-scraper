@@ -118,7 +118,7 @@ def test_a_wall_is_never_content_even_with_cards_in_it():
 
 def test_extension_markers_are_not_a_captcha():
     """The Scraping Browser's extension injects `.../captcha/...` scripts into
-    every page it loads (CLAUDE.md §8, §19)."""
+    every page it loads (2scraper family rule)."""
     import product_parser as P
     html = fixture("listing_dom.html").replace(
         "</head>", '<script src="chrome-extension://kjmk/content/captcha/geetest/interceptor.js">'
@@ -1045,7 +1045,7 @@ def test_pyppeteer_keeps_the_credential_off_argv():
 # 10. Structure
 # ---------------------------------------------------------------------------
 
-MODULES = ["product_parser", "output_writer", "page_flow", "browser_bridge", "captcha_solver",
+MODULES = ["avito_cli", "robots_snapshot", "product_parser", "output_writer", "page_flow", "browser_bridge", "captcha_solver",
            "env_config", "proxy_pool", "proxy_forwarder", "diff_runs", "fingerprint_client",
            "playwright_scraper", "selenium_scraper", "puppeteer_scraper",
            "tools/browser_profile_client", "tools/scan_secrets", "tools/autosolve_probe"]
@@ -1139,20 +1139,158 @@ def test_banned_wordings():
 
 def test_no_site_specific_drift_from_a_sibling_repo():
     """This repo was scaffolded from homedepot-scraper; its words must not
-    survive in shipped code (CLAUDE.md §16: copied core is untested core)."""
+    survive in shipped code (2scraper family rule: copied core is untested core)."""
+    import subprocess
+    # Substrings, plus whole words that are ordinary English but name another
+    # site's domain here. The first version scanned a hand-kept list of file
+    # kinds and missed `requirements.txt` ("bershka-scraper"), `.gitignore`
+    # and the Claude review prompt ("Player and Transfer", "in EUR") — found
+    # by an external audit, 2026-10-07. So: every file git tracks.
     foreign = ("homedepot", "home depot", "akamai", "apollo", "bershka", "givenchy", "farfetch",
-               "mediamarkt", "transfermarkt", "inditex", "demandware", "storeid")
-    paths = [n for n in os.listdir(HERE) if n.endswith((".py", ".md", ".toml", ".yml"))]
-    paths += [os.path.join("tools", n) for n in os.listdir(os.path.join(HERE, "tools"))]
-    paths += [os.path.join(".github", "workflows", n)
-              for n in os.listdir(os.path.join(HERE, ".github", "workflows"))]
-    paths += [os.path.join(".github", "ci_checks.py"), "Dockerfile", ".env.example"]
-    for name in paths:
-        if name == "smoke_test.py" or not os.path.isfile(os.path.join(HERE, name)):
+               "mediamarkt", "transfermarkt", "inditex", "demandware", "storeid",
+               "index.html", "landing.md", "claude.md")
+    words = re.compile(r"\b(player|players|transfer|transfers|eur)\b")
+    try:
+        tracked = subprocess.run(["git", "ls-files", "-z"], cwd=HERE, capture_output=True,
+                                 text=True, timeout=60)
+        names = [n for n in tracked.stdout.split("\0") if n] if tracked.returncode == 0 else []
+    except Exception:
+        names = []
+    if not names:
+        skip("sibling-vocabulary scan (not a git checkout)")
+        return
+    for name in names:
+        if name == "smoke_test.py" or name.startswith("fixtures/") and name.endswith(".html"):
             continue
-        text = open(os.path.join(HERE, name), encoding="utf-8", errors="replace").read().lower()
-        hits = [w for w in foreign if w in text]
+        path = os.path.join(HERE, name)
+        if not os.path.isfile(path):
+            continue
+        text = open(path, encoding="utf-8", errors="replace").read().lower()
+        hits = [w for w in foreign if w in text] + sorted(set(words.findall(text)))
         eq("%s is free of sibling vocabulary" % name, hits, [])
+
+
+# ---------------------------------------------------------------------------
+# 11. Regressions from the external audit of v1.0.0 (2026-10-07)
+# ---------------------------------------------------------------------------
+
+def test_robots_rules_ship_as_a_module_and_fail_closed():
+    """P0-1: the wheel did not ship robots.snapshot.txt; an installed copy
+    read zero rules and allowed every URL."""
+    import hashlib
+    import product_parser as P
+    import robots_snapshot
+    eq("snapshot hash matches its content",
+       hashlib.sha256(robots_snapshot.ROBOTS_TXT.encode()).hexdigest(), robots_snapshot.SHA256)
+    check("parser no longer reads a loose data file",
+          "robots.snapshot.txt" not in inspect.getsource(P._robots_rules))
+    toml = open(os.path.join(HERE, "pyproject.toml"), encoding="utf-8").read()
+    check("robots_snapshot is a packaged module", '"robots_snapshot"' in toml)
+    saved_rules, saved_txt = P._ROBOTS, robots_snapshot.ROBOTS_TXT
+    try:
+        P._ROBOTS, robots_snapshot.ROBOTS_TXT = None, "User-agent: *\n"
+        try:
+            P._robots_rules()
+            check("an empty snapshot fails CLOSED", False)
+        except RuntimeError:
+            check("an empty snapshot fails CLOSED", True)
+    finally:
+        P._ROBOTS, robots_snapshot.ROBOTS_TXT = saved_rules, saved_txt
+
+
+def test_console_script_without_playwright_explains_itself():
+    """P0-2: `pip install avito-scraper` gave a command that died with
+    ModuleNotFoundError: playwright on its first run."""
+    import avito_cli
+    toml = open(os.path.join(HERE, "pyproject.toml"), encoding="utf-8").read()
+    check("console script goes through the launcher", 'avito-scraper = "avito_cli:main"' in toml)
+    saved = {k: v for k, v in sys.modules.items() if k == "playwright_scraper"
+             or k == "playwright" or k.startswith("playwright.")}
+    for k in saved:
+        del sys.modules[k]
+    sys.modules["playwright"] = None  # makes `import playwright...` fail
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err):
+            rc = avito_cli.main(["--help"])
+    finally:
+        del sys.modules["playwright"]
+        sys.modules.pop("playwright_scraper", None)
+        sys.modules.update(saved)
+    eq("missing playwright -> exit 2, not a traceback", rc, 2)
+    check("and says what to install", "avito-scraper[playwright]" in err.getvalue())
+
+
+class _StartFails(FakeDriver):
+    def start(self):
+        raise RuntimeError("BrowserType.connect_over_cdp: WebSocket error: ws://"
+                           + "EXAMPLE-LOGIN" + ":" + "EXAMPLE-PASS" + "@cb.2captcha.com:9222/ 500")
+
+
+def test_every_ending_writes_the_attempt_sidecar():
+    """P1-2 / P1-3: a start failure and an unexpected exception returned
+    before finish_run, so no attempt metadata; and a parser bug was reported
+    as exit 5, like a dead exit."""
+    import browser_bridge
+    import product_parser as P
+    from output_writer import ATTEMPT_META_SUFFIX
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "o")
+        rc = _quiet(browser_bridge.run, _args(out=out), _StartFails([]))
+        meta = json.load(open(out + ATTEMPT_META_SUFFIX))
+        eq("start failure -> exit 5", rc, 5)
+        eq("and an attempt sidecar saying so",
+           (meta["status"], meta["stop_reason"], meta["exit_code"], meta["data_updated"]),
+           ("failed", "transport_error", 5, False))
+        check("with the error class", meta["transport_facts"]["error_class"] == "RuntimeError")
+        check("and no password in it", "EXAMPLE-PASS" not in json.dumps(meta))
+
+        real = P.parse_listing
+
+        def broken(*a, **k):
+            raise TypeError("a parser bug")
+        P.parse_listing = broken
+        try:
+            out2 = os.path.join(tmp, "o2")
+            rc = _quiet(browser_bridge.run, _args(out=out2), FakeDriver([fixture("listing_dom.html")]))
+        finally:
+            P.parse_listing = real
+        meta = json.load(open(out2 + ATTEMPT_META_SUFFIX))
+        eq("an unexpected exception is a crash (1), not transport (5)", rc, 1)
+        eq("recorded as a crash", (meta["stop_reason"], meta["exit_code"]), ("crash", 1))
+
+
+def test_diff_runs_refuses_runs_it_cannot_vouch_for():
+    """P1-4: two JSON files with no sidecars were compared freely."""
+    import diff_runs
+    import output_writer as O
+    with tempfile.TemporaryDirectory() as tmp:
+        old, new = os.path.join(tmp, "old.json"), os.path.join(tmp, "new.json")
+        for p in (old, new):
+            open(p, "w").write("[]")
+        args = argparse.Namespace(old=old, new=new)
+        check("no metadata -> refused", _quiet(diff_runs._check_comparable, args) is False)
+        base = {"status": "complete", "mode": "listing", "pages_completed": 1, "pages_requested": 1}
+        for p, cls in ((old, O.Product), (new, O.Item)):
+            m = dict(base, scope={"listing": LISTING, "pages": 1,
+                                  "schema_version": O.schema_version(cls)})
+            open(p[:-5] + ".meta.json", "w").write(json.dumps(m))
+        check("different schema versions -> refused",
+              _quiet(diff_runs._check_comparable, args) is False)
+        m = dict(base, scope={"listing": LISTING, "pages": 1,
+                              "schema_version": O.schema_version(O.Product)})
+        open(new[:-5] + ".meta.json", "w").write(json.dumps(m))
+        check("complete, same listing, same schema -> allowed",
+              _quiet(diff_runs._check_comparable, args) is True)
+
+
+def test_schema_version_is_per_mode():
+    """P2-1: the fingerprint covered Product's field names only."""
+    import output_writer as O
+    versions = {m: O.schema_version(c) for m, c in O.ROW_CLASS_BY_MODE.items()}
+    eq("three modes, three schema versions", len(set(versions.values())), 3)
+    eq("scope carries the MODE's version", O.scope_fingerprint(LISTING, "item", 1)["schema_version"],
+       versions["item"])
 
 
 def main():

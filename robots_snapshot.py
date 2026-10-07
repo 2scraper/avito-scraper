@@ -1,4 +1,21 @@
-User-agent: Yandex
+"""
+robots_snapshot.py
+------------------
+avito.ru's robots.txt, as fetched on 2026-10-06 (sha256 dea0300f7e9854b10b96ab5af7a5011277f014e4cf31db3f75c85329c7a05045).
+
+A Python module rather than a data file on purpose: setuptools ships every
+module in `py-modules`, but a loose `robots.snapshot.txt` beside them was
+silently LEFT OUT of the wheel, so an installed copy read zero rules and
+allowed every URL the checkout refused (found by an external audit,
+2026-10-07). product_parser refuses to run on an empty rule set.
+
+Refresh: replace the string with the live file and update the date and hash.
+"""
+
+FETCHED = "2026-10-06"
+SHA256 = "dea0300f7e9854b10b96ab5af7a5011277f014e4cf31db3f75c85329c7a05045"
+
+ROBOTS_TXT = """User-agent: Yandex
 Disallow: /auto-logbook
 Allow: /pets/lost-and-found$
 Allow: /pets/lost-and-found/$
@@ -390,3 +407,4 @@ Disallow:
 User-agent: YandexDirect
 Allow: /
 Sitemap: https://www.avito.ru/sitemap/index.xml
+"""
