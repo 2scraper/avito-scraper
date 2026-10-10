@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "avito-scraper"
-version = "1.0.1"
+version = "1.0.2"
 description = "avito.ru listing, item and seller scraper (Playwright, Selenium, Puppeteer, or the Scraping Browser API over CDP) — GeeTest firewall solving, proxies, fingerprints"
 readme = "README.md"
 requires-python = ">=3.9"

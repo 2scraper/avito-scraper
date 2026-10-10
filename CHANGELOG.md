@@ -6,6 +6,42 @@ follow SemVer as closely as a CLI toolkit can: a **patch** means fixes, and a
 fix may change a default when the old one was wrong — such a change leads its
 entry in a blockquote.
 
+## [1.0.2] — 2026-10-10
+
+Fixes from a review of v1.0.1, each reproduced against v1.0.1 before it
+was fixed, plus one more that the live check turned up.
+
+> **The first run in the README failed in v1.0.1.** `--mode listing --url
+> "https://www.avito.ru/moskva?q=iphone+15" --pages 2` could exit **4**
+> ("0 rows — refusing to write") after 0 ms. Upgrade if you met that.
+
+### Fixed
+
+* **A page skeleton was taken for an empty listing.** Any served avito
+  page without cards and without a pager counted as `empty`, and the
+  readiness wait stopped on it at once — so a listing whose cards had not
+  painted yet exited 4 with no data. `empty` is now given only on an
+  explicit sign (the «Похожие объявления» substitutes heading); a page that
+  is merely without cards is waited for, and is called empty only if it is
+  still without cards after the full wait. Measured after the fix: the
+  command above gives 100 rows over the Scraping Browser (readiness waits
+  of 500 and 1000 ms — the skeleton was there) and 100 rows on a local
+  browser.
+* **The same after a proof-of-work.** Once the firewall's proof-of-work
+  cleared, a skeleton that followed was classified `empty` straight away
+  ("page 1 is a served listing with no cards on it", exit 4). Same fix;
+  measured on the local route: proof-of-work → GeeTest → 100 rows.
+* **`--out` into a directory that does not exist** crashed with
+  `FileNotFoundError` and wrote not even the attempt metadata — and the
+  README's examples write to `live/`, which a fresh clone does not have.
+  The directory is created now, for the output, the metadata and
+  `--dump-html`.
+* **`solver_cost` was always 0.** 2Captcha returns a solve's cost as a
+  string; the total counted numbers only. Found on the live check (two
+  solves at $0.00299, reported total 0).
+* The item-mode log counted against the whole input (`item 1/100` under
+  `--max-products 2`); it now counts what will be fetched.
+
 ## [1.0.1] — 2026-10-10
 
 Fixes from an external audit of v1.0.0, and from live runs on 2026-10-08,

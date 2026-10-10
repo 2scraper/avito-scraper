@@ -201,6 +201,9 @@ def _atomic_write(path: str, text: str) -> None:
     import os
     import tempfile
     directory = os.path.dirname(os.path.abspath(path)) or "."
+    # `--out live/x` in a fresh clone: no `live/`. mkstemp raised
+    # FileNotFoundError and not even the attempt metadata was written.
+    os.makedirs(directory, exist_ok=True)
     handle_fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-",
                                       suffix=os.path.basename(path))
     try:

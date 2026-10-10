@@ -306,6 +306,13 @@ with its time and cost, rotations, and auto-solve events.
 | pyppeteer, Scraping Browser, `--pages 2` | 98 rows, exit 0 |
 | Selenium, local Chrome, `--pages 2` | 99 rows, exit 0 — page 2 met the wall: proof-of-work did not clear in 25 s, a fresh exit met GeeTest, solved in 92 s |
 
+2026-10-10, v1.0.2, the search in Usage (`?q=iphone+15 --pages 2`):
+
+| Run | Result |
+|---|---|
+| Playwright, Scraping Browser | 100 rows, exit 0 — both pages arrived as a skeleton first (ready after 500 and 1000 ms) |
+| Playwright, local Chromium through the proxy | 100 rows, exit 0 — proof-of-work cleared in 1 s, then GeeTest: the first token was refused, a fresh exit's was accepted (15 s and 26 s, $0.00299 each) |
+
 `sample_output.json` is cut from the 3-page run (10 rows; seller names
 replaced with placeholders).
 
