@@ -370,9 +370,21 @@ def detect_page_state(html: str, status: Optional[int] = None,
     served = html.count("avito.st") >= 5
     if served and kind in (None, "listing") and results_cutoff(html) is not None:
         return "empty"
-    if served and kind in (None, "listing") and "pagination-button" not in html:
-        return "empty"
+    # A served page with no cards and no pager is NOT proof of an empty
+    # listing: the skeleton before the cards paint looks exactly like that
+    # (2026-10-10, a 58 KB `?q=iphone+15` page, exit 4 after 0 ms). It is
+    # `unknown` — wait — and only `served_listing_without_cards` after the
+    # full wait makes it `empty` (browser_bridge.fetch_page).
     return "unknown"
+
+
+def served_listing_without_cards(html: str, url: Optional[str] = None) -> bool:
+    """The weak sign of an empty listing — a served avito page with no cards
+    and no pager. Only meaningful once the full readiness wait has run."""
+    html = html or ""
+    kind = page_kind(url) if url else None
+    return (kind in (None, "listing") and not is_wall(html) and html.count("avito.st") >= 5
+            and not _has_listing_cards(html) and "pagination-button" not in html)
 
 
 # ---------------------------------------------------------------------------

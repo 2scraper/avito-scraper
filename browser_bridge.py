@@ -332,6 +332,11 @@ def fetch_page(driver, args, url: str, mode: str, facts: Dict[str, Any], log=Non
         html = wait_for_content(driver, mode, url, page_flow.content_timeout_ms(mode), log=log)
         state = P.detect_page_state(html, url=url)
 
+    if state == "unknown" and mode == "listing" and P.served_listing_without_cards(html, url):
+        # Two full waits and still a served page with no cards: now, and only
+        # now, the weak sign is believed.
+        state = "empty"
+
     return {"html": html, "state": state, "status": status}
 
 
@@ -546,8 +551,10 @@ def run(args, driver) -> int:
 
     facts["autosolve_armed"] = getattr(driver, "autosolve_armed", False)
     facts["autosolve_events"] = getattr(driver, "autosolve_events", [])
-    facts["solver_cost"] = round(sum(s.get("cost") or 0 for s in facts["solves"]
-                                     if isinstance(s.get("cost"), (int, float))), 5)
+    # 2Captcha returns the cost as a STRING ("0.00299"); summing only numbers
+    # reported 0 for every paid run (live, 2026-10-10: two solves, total 0).
+    facts["solver_cost"] = round(sum(P.parse_number(s.get("cost")) or 0
+                                     for s in facts["solves"]), 5)
 
     if extra_rows:
         output_writer.save(extra_rows, args.out + "_listings", args.format,
@@ -629,11 +636,13 @@ def _run_listing(driver, args, url, facts, seen, log) -> List[Product]:
 
 def _run_items(driver, args, urls, facts, log) -> List[Any]:
     rows: List[Any] = []
+    # `--from iphones.json --max-products 2` logged "item 1/100".
+    planned = min(len(urls), args.max_products) if args.max_products else len(urls)
     for i, url in enumerate(urls, 1):
         if args.max_products and len(rows) >= args.max_products:
             facts["max_products_reached"] = True
             break
-        log("item %d/%d: %s" % (i, len(urls), url))
+        log("item %d/%d: %s" % (i, max(planned, i), url))
         result = fetch_with_rotation(driver, args, url, "item", facts, log=log)
         facts["states"].append(result["state"])
         _dump(args, result["html"], i)
@@ -831,6 +840,7 @@ def _dump(args, html: str, page: int) -> None:
         return
     root, ext = os.path.splitext(args.dump_html)
     path = "%s_p%d%s" % (root, page, ext or ".html")
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(html or "")
     try:

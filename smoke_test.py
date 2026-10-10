@@ -546,7 +546,7 @@ def test_solved_wall_goes_through_the_page_form():
     def fake_solve(key, cid, url, proxy=None, **kw):
         calls.update(key=key, cid=cid, proxy=proxy)
         return {"captcha_id": cid, "lot_number": "l", "pass_token": "p", "gen_time": "1",
-                "captcha_output": "o", "_cost": 0.00299}
+                "captcha_output": "o", "_cost": "0.00299"}   # a string, as the API sends it
     captcha_solver.solve_geetest_v4 = fake_solve
     try:
         d = FakeDriver([fixture("wall_captcha.html")], after_js=fixture("listing_dom.html"))
@@ -777,6 +777,109 @@ def test_shop_sellerid_comes_from_its_items_page():
     eq("all 40 via the feed, exit 0", (rc, len(rows)), (0, 40))
     eq("id found on the items page", feed["sellerId_from"], "items page")
     eq("feed URL", feed["url"], "https://www.avito.ru/brands/seller1/all?sellerId=" + FAKE_SELLER_HASH)
+
+
+class PaintingDriver(FakeDriver):
+    """A page that changes as time passes: `timeline` is [(ms, html), …] —
+    from `ms` of accumulated sleep on, `content()` returns that html."""
+
+    def __init__(self, timeline):
+        super().__init__([timeline[0][1]])
+        self.timeline = timeline
+        self.slept = 0
+
+    def sleep(self, ms):
+        self.slept += ms
+
+    def content(self):
+        html = self.timeline[0][1]
+        for at, doc in self.timeline:
+            if self.slept >= at:
+                html = doc
+        self.current = html
+        return html
+
+
+def _skeleton():
+    """The real listing with its cards, state and pager removed — what a
+    served page looks like before the grid paints (58 KB, 2026-10-10)."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(fixture("listing_dom.html"), "html.parser")
+    for node in soup.select('[data-marker="item"], [data-marker*="pagination-button"], '
+                            'script[data-mfe-state]'):
+        node.decompose()
+    return str(soup)
+
+
+def _proof_of_work():
+    return re.sub(r'<form[^>]*js-firewall-form.*?</form>', "", fixture("wall_captcha.html"),
+                  flags=re.S)
+
+
+def test_a_skeleton_is_not_an_empty_listing():
+    """Audit 2026-10-10: `?q=iphone+15` exited 4 after 0 ms on a 58 KB page
+    with the right title and no cards yet."""
+    import product_parser as P
+    sk = _skeleton()
+    check("the skeleton has no cards and no pager",
+          not P._has_listing_cards(sk) and "pagination-button" not in sk)
+    eq("a skeleton is unknown (wait), not empty", P.detect_page_state(sk, url=LISTING), "unknown")
+    check("but it carries the weak sign", P.served_listing_without_cards(sk, LISTING))
+    eq("«Похожие объявления» is still empty at once",
+       P.detect_page_state(fixture("listing_empty.html"), url=LISTING), "empty")
+
+
+def test_fetch_waits_for_a_skeleton_to_paint():
+    import browser_bridge
+    facts = {"walls": [], "solves": [], "rotations": 0}
+    d = PaintingDriver([(0, _skeleton()), (2000, fixture("listing_dom.html"))])
+    r = _quiet(browser_bridge.fetch_page, d, _args(), LISTING, "listing", facts)
+    eq("cards painted after 2 s -> content, not empty", r["state"], "content")
+    d = PaintingDriver([(0, _skeleton())])
+    r = _quiet(browser_bridge.fetch_page, d, _args(), LISTING, "listing", facts)
+    eq("still a skeleton after the full wait -> empty", r["state"], "empty")
+    check("and only after the full wait", d.slept >= 20000, "(slept %d ms)" % d.slept)
+
+
+def test_after_proof_of_work_a_skeleton_is_waited_for():
+    """Audit 2026-10-10, point 2: a local run after the proof-of-work got a
+    5 KB page and ended «page 1 is a served listing with no cards», exit 4."""
+    import browser_bridge
+    facts = {"walls": [], "solves": [], "rotations": 0}
+    d = PaintingDriver([(0, _proof_of_work()), (3000, _skeleton()),
+                        (9000, fixture("listing_dom.html"))])
+    r = _quiet(browser_bridge.fetch_page, d, _args(), LISTING, "listing", facts)
+    eq("proof-of-work -> skeleton -> cards = content", r["state"], "content")
+    eq("the wall was recorded", [w["state"] for w in facts["walls"]], ["challenge"])
+
+
+def test_out_directory_is_created():
+    """Audit 2026-10-10, point 3: README writes to `live/`, absent in a clone."""
+    import browser_bridge
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "live", "deeper", "run")
+        dump = os.path.join(tmp, "dumps", "page.html")
+        rc = _quiet(browser_bridge.run, _args(out=out, dump_html=dump),
+                    FakeDriver([fixture("listing_dom.html")]))
+        eq("run ok into a missing directory", rc, 0)
+        check("rows written", os.path.exists(out + ".json"))
+        check("attempt metadata written", os.path.exists(out + ".latest_attempt.meta.json"))
+        check("dump written", os.path.exists(os.path.join(tmp, "dumps", "page_p1.html")))
+
+
+def test_item_log_counts_what_will_be_fetched():
+    """Audit 2026-10-10, point 4: `--max-products 2` over 100 urls logged 1/100."""
+    import browser_bridge
+    urls = [ITEM_COMPANY] * 2 + ["%s%d" % (ITEM_PRIVATE[:-3], n) for n in range(100, 198)]
+    buf = io.StringIO()
+    with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(buf), \
+            contextlib.redirect_stderr(buf):
+        browser_bridge.run(_args(mode="item", url=urls, max_products=2, verbose=True,
+                                 out=os.path.join(tmp, "o")),
+                           FakeDriver([fixture("item_company.html")] * 2))
+    log = buf.getvalue()
+    check("denominator is the cap", "item 1/2:" in log and "item 2/2:" in log, log[:300])
+    check("not the file's length", "/100:" not in log)
 
 
 def test_the_wait_wall_is_a_refusal_not_a_challenge():
