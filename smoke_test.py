@@ -185,6 +185,21 @@ def test_listing_state_values():
     eq("unlabelled shop is NOT called private", rows["7924194781"].seller_type, None)
 
 
+def test_recommendation_carousel_is_not_results():
+    """2026-10-10: «Подобрали для вас» sits inside the grid with item-shaped cards."""
+    import product_parser as P
+    html = fixture("listing_dom.html")
+    carousel = ('<div data-marker="itemsCarousel"><h2>Подобрали для вас</h2>'
+                '<div data-marker="item" data-item-id="9999999999">'
+                '<a data-marker="item-title" href="/moskva/odezhda/hudi_9999999999">'
+                '<h3>Худи</h3></a><meta itemprop="price" content="3290"></div></div>')
+    i = html.index('data-marker="item"')
+    i = html.rindex("<", 0, i)
+    rows = P.parse_listing(html[:i] + carousel + html[i:], url=LISTING + "?p=2")
+    eq("carousel card dropped, results kept", [r.sku for r in rows],
+       ["8199454701", "8275958708", "8354606253", "8349145903"])
+
+
 def test_the_bare_price_field_is_pre_discount():
     """The trap this repo is built around: Avito's bare price is the OLD one."""
     import product_parser as P
@@ -325,6 +340,22 @@ def test_seller_values():
     check("dates as printed", all(r.published_text for r in rows))
 
 
+def test_seller_tabbed_layout_and_heading_name():
+    """2026-10-10, /brands/i1300361: «Активные | 11 | Завершённые | 5» tabs,
+    and a fetch whose title did not yield the name."""
+    import product_parser as P
+    html = fixture("seller.html")
+    html = re.sub(r"<title>.*?</title>", "<title>Авито</title>", html, flags=re.S)
+    html = re.sub(r"Объявления(\s*</[^>]+>)", r"Активные\1", html, count=1)
+    seller, _ = P.parse_seller(html, url=SELLER)
+    eq("tabbed counter read", seller.active_ads, 353)
+    eq("no title, no heading -> None, not a guess", seller.seller_name, None)
+    marker = 'data-marker="profile">'
+    html = html.replace(marker, marker + '<h1 data-marker="name Продавец 1">Продавец 1</h1>', 1)
+    seller, _ = P.parse_seller(html, url=SELLER)
+    eq("name falls back to the profile heading", seller.seller_name, "Продавец 1")
+
+
 # ---------------------------------------------------------------------------
 # 4. The captcha rung
 # ---------------------------------------------------------------------------
@@ -425,9 +456,11 @@ def _args(**kw):
 class FakeDriver:
     name = "fake"
 
-    def __init__(self, pages, after_js=None):
+    def __init__(self, pages, after_js=None, scrolls=None):
         self.pages = list(pages)
         self.after_js = after_js
+        self.scrolls = list(scrolls or [])   # documents a scroll reveals, in order
+        self.scrolled = 0
         self.current = ""
         self.js = []
         self.autosolve_armed = False
@@ -448,7 +481,14 @@ class FakeDriver:
         return self.current
 
     def count(self, selector):
-        return self.current.count('data-marker="item"') if "item" in selector else 0
+        from bs4 import BeautifulSoup
+        return len(BeautifulSoup(self.current, "html.parser").select(selector))
+
+    def scroll_to_bottom(self):
+        self.scrolled += 1
+        if self.scrolls:
+            self.current = self.scrolls.pop(0)
+        return 1000 + len(self.current)
 
     def run_js(self, body):
         self.js.append(body)
@@ -528,13 +568,263 @@ def test_solved_wall_goes_through_the_page_form():
     eq("cleared_by", facts["walls_cleared_by"], ["solver"])
 
 
+TINY_PNG = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4"
+            "nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==")
+
+
+def _wall_showing(variant):
+    """The REAL wall, with the server-chosen block un-hidden the way the wall's
+    own renderCaptcha() does it. Derived on purpose: every live request so far
+    was assigned GeeTest, so no capture of the other two exists."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(fixture("wall_captcha.html"), "html.parser")
+    for sel, name in (("#geetest_captcha", "geetest"), ("#inner-captcha", "image"),
+                      ("#h-captcha", "hcaptcha")):
+        node = soup.select_one(sel)
+        node["style"] = "display: %s" % ("block" if name == variant else "none")
+    if variant == "image":
+        soup.select_one("#inner-captcha img")["src"] = TINY_PNG
+    return str(soup)
+
+
+def test_the_wall_names_its_variant():
+    import product_parser as P
+    for variant in ("geetest", "image", "hcaptcha"):
+        html = _wall_showing(variant)
+        eq("variant %s recognised" % variant, P.wall_variant(html), variant)
+        eq("variant %s is a captcha page" % variant, P.detect_page_state(html, url=LISTING), "captcha")
+    eq("the picture is read off the wall", P.wall_image_src(_wall_showing("image")), TINY_PNG)
+    eq("the wait-wall has no variant", P.wall_variant(fixture("wall_wait.html")), None)
+
+
+def test_image_captcha_goes_through_the_page_form():
+    import browser_bridge
+    import captcha_solver
+    calls = {}
+    real = captcha_solver.solve_image
+
+    def fake(key, src, **kw):
+        calls["src"] = src
+        return {"text": 'ab"12', "_cost": "0.001", "_task_id": 7}
+    captcha_solver.solve_image = fake
+    try:
+        d = FakeDriver([_wall_showing("image")], after_js=fixture("listing_dom.html"))
+        with tempfile.TemporaryDirectory() as tmp:
+            rc = _quiet(browser_bridge.run, _args(out=os.path.join(tmp, "o"), twocaptcha_key="k",
+                                                  solver_proxy=PLACEHOLDER_PROXY), d)
+            facts = json.load(open(os.path.join(tmp, "o.meta.json")))["transport_facts"]
+    finally:
+        captcha_solver.solve_image = real
+    eq("image wall solved -> rows", rc, 0)
+    eq("the wall's own picture went to the solver", calls.get("src"), TINY_PNG)
+    check("answer typed into the page's own #form-input",
+          any("#form-input" in j and '"ab\\"12"' in j for j in d.js))
+    eq("recorded as an image solve, verified", (facts["solves"][0]["variant"],
+                                                facts["solves"][0]["verified"]), ("image", True))
+    try:
+        captcha_solver.image_task("https://example.invalid/pic.png")
+        check("a picture that is not a data: URL is refused", False)
+    except captcha_solver.SolverError:
+        check("a picture that is not a data: URL is refused", True)
+
+
+def test_hcaptcha_task_shape():
+    """`HCaptchaTask` in the shape 2Captcha confirmed on 2026-10-09."""
+    import captcha_solver as C
+    import product_parser as P
+    html = _wall_showing("hcaptcha")
+    key = P.wall_hcaptcha_sitekey(html)
+    eq("sitekey read off the wall", key, "070db171-ddb9-4c93-b7f6-d25d3c9d7e28")
+    eq("no rqdata on avito's wall", P.wall_hcaptcha_rqdata(html), None)
+    t = C.hcaptcha_task(key, LISTING, PLACEHOLDER_PROXY)
+    eq("task fields", {k: t[k] for k in ("type", "websiteURL", "websiteKey", "isInvisible")},
+       {"type": "HCaptchaTask", "websiteURL": LISTING, "websiteKey": key, "isInvisible": False})
+    eq("through the browser's proxy", (t["proxyType"], t["proxyAddress"], t["proxyPort"]),
+       ("http", "proxy.invalid", 2334))
+    check("no enterprisePayload without rqdata", "enterprisePayload" not in t)
+    eq("rqdata goes in enterprisePayload", C.hcaptcha_task(key, LISTING, None, rqdata="RQ-EXAMPLE")
+       ["enterprisePayload"], {"rqdata": "RQ-EXAMPLE"})
+    try:
+        C.hcaptcha_task("not-a-key", LISTING, None)
+        check("a bad sitekey is refused", False)
+    except C.SolverError:
+        check("a bad sitekey is refused", True)
+
+
+def test_hcaptcha_goes_through_the_page_form():
+    import browser_bridge
+    import captcha_solver
+    calls = {}
+    real = captcha_solver.solve_hcaptcha
+
+    def fake(key, sitekey, url, proxy=None, rqdata=None, **kw):
+        calls.update(sitekey=sitekey, proxy=proxy, rqdata=rqdata)
+        return {"token": "P1_EXAMPLE.token", "_cost": "0.00299", "_task_id": 9}
+    captcha_solver.solve_hcaptcha = fake
+    try:
+        d = FakeDriver([_wall_showing("hcaptcha")], after_js=fixture("listing_dom.html"))
+        with tempfile.TemporaryDirectory() as tmp:
+            rc = _quiet(browser_bridge.run, _args(out=os.path.join(tmp, "o"), twocaptcha_key="k",
+                                                  solver_proxy=PLACEHOLDER_PROXY), d)
+            solve = json.load(open(os.path.join(tmp, "o.meta.json")))["transport_facts"]["solves"][0]
+    finally:
+        captcha_solver.solve_hcaptcha = real
+    eq("hCaptcha wall solved -> rows", rc, 0)
+    eq("the wall's own sitekey, through the browser's exit",
+       (calls.get("sitekey"), calls.get("proxy")), ("070db171-ddb9-4c93-b7f6-d25d3c9d7e28", PLACEHOLDER_PROXY))
+    check("token into #h-captcha-response of the page's own form",
+          any("#h-captcha-response" in j and "P1_EXAMPLE.token" in j and ".js-firewall-form" in j
+              for j in d.js))
+    eq("recorded as an hCaptcha solve, verified", (solve["variant"], solve["verified"]), ("hcaptcha", True))
+
+
+FAKE_SELLER_HASH = "ab" * 16   # not a real id; this file is outside the secret scan
+
+
+def _seller_page(n_cards, active_ads=353, with_hash=True):
+    """The REAL seller fixture with its card cloned to `n_cards` distinct ids,
+    and (optionally) the profile's own link carrying a sellerId — trimmed out
+    of the committed fixture because a 32-hex id reads as a credential."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(fixture("seller.html"), "html.parser")
+    cards = soup.select(P_SELLER_CARD())
+    proto, proto_id = str(cards[0]), cards[0]["data-item-id"]
+    for c in cards:
+        c.decompose()
+    holder = soup.body
+    for i in range(n_cards):
+        holder.append(BeautifulSoup(proto.replace(proto_id, str(900000000 + i)), "html.parser"))
+    html = str(soup).replace("353", str(active_ads))
+    if with_hash:
+        html = html.replace("</body>", '<a href="/brands/seller1/items/all?sellerId=%s">x</a></body>'
+                            % FAKE_SELLER_HASH)
+    return html
+
+
+def P_SELLER_CARD():
+    import product_parser
+    return product_parser.SELLER_CARD_SELECTOR
+
+
+def _run_seller_with(driver, **kw):
+    import browser_bridge
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "o")
+        rc = _quiet(browser_bridge.run, _args(mode="seller", url=[SELLER], out=out, **kw), driver)
+        meta = json.load(open(out + ".latest_attempt.meta.json"))
+        rows = json.load(open(out + "_listings.json")) if os.path.exists(out + "_listings.json") else []
+        seller = json.load(open(out + ".json")) if os.path.exists(out + ".json") else []
+    return rc, meta, rows, seller
+
+
+def test_seller_feed_scrolls_to_the_profile_counter():
+    """Owner decision 2026-10-09 (option A): a seller's listings beyond the
+    profile's 15 come from scrolling its feed."""
+    d = FakeDriver([_seller_page(15, active_ads=40), _seller_page(15, active_ads=40)],
+                   scrolls=[_seller_page(30, 40), _seller_page(40, 40)])
+    rc, meta, rows, seller = _run_seller_with(d)
+    feed = meta["transport_facts"]["seller_feed"]
+    eq("seller run ok", rc, 0)
+    eq("all 40 listings, not the profile's 15", len(rows), 40)
+    eq("distinct ids", len({r["sku"] for r in rows}), 40)
+    eq("positions 1..40", [r["position"] for r in rows][:3] + [rows[-1]["position"]], [1, 2, 3, 40])
+    eq("the feed URL is the allowed /all one",
+       feed["url"], "https://www.avito.ru/brands/seller1/all?sellerId=" + FAKE_SELLER_HASH)
+    eq("stopped on reaching the counter", (feed["rounds"], feed["stop"]), (2, "reached 40"))
+    check("the feed was armed with its own «Показать все» button",
+          feed["show_all_clicks"] >= 1 and any("show_all_button" in j for j in d.js))
+    eq("seller row says how many listings were written", seller[0]["listings_on_page"], 40)
+
+
+def test_seller_feed_respects_max_products_and_stops_when_still():
+    d = FakeDriver([_seller_page(15, 353), _seller_page(15, 353)],
+                   scrolls=[_seller_page(30, 353), _seller_page(45, 353)])
+    rc, meta, rows, _ = _run_seller_with(d, max_products=20)
+    eq("--max-products caps the feed", len(rows), 20)
+    eq("and the scrolling stopped there", meta["transport_facts"]["seller_feed"]["rounds"], 1)
+    d2 = FakeDriver([_seller_page(15, 353), _seller_page(15, 353)],
+                    scrolls=[_seller_page(30, 353)])   # then nothing new arrives
+    rc, meta, rows, _ = _run_seller_with(d2)
+    feed = meta["transport_facts"]["seller_feed"]
+    eq("a feed that stops growing ends the scroll", feed["stop"], "feed stopped growing")
+    eq("with what it had", len(rows), 30)
+    eq("after the still rounds, not forever", feed["rounds"], 4)
+
+
+def test_seller_without_an_id_keeps_its_first_listings():
+    # Profile and its /items page both without a sellerId.
+    d = FakeDriver([_seller_page(15, 353, with_hash=False), _seller_page(15, 353, with_hash=False)])
+    rc, meta, rows, _ = _run_seller_with(d)
+    from output_writer import EXIT_PARTIAL
+    eq("no sellerId -> the profile's 15, reported PARTIAL (15 of 353)", (rc, len(rows)),
+       (EXIT_PARTIAL, 15))
+    eq("status partial", (meta["status"], meta["stop_reason"]), ("partial", "seller_listings_short"))
+    eq("and the reason is recorded", meta["transport_facts"]["seller_feed"]["stop"],
+       "no sellerId on the profile")
+
+
+def test_shop_sellerid_comes_from_its_items_page():
+    """2026-10-10, /brands/a3boots.shop: the profile has no sellerId; its
+    `/brands/<slug>/items` page does, and the `/all` feed then works."""
+    import product_parser as P
+    eq("items URL has no ?s= (robots)", P.seller_items_url(SELLER),
+       "https://www.avito.ru/brands/seller1/items")
+    check("and robots allows it", P.robots_verdict(P.seller_items_url(SELLER))[0])
+    d = FakeDriver([_seller_page(15, 40, with_hash=False), _seller_page(12, 40),
+                    _seller_page(15, 40)], scrolls=[_seller_page(40, 40)])
+    rc, meta, rows, _ = _run_seller_with(d)
+    feed = meta["transport_facts"]["seller_feed"]
+    eq("all 40 via the feed, exit 0", (rc, len(rows)), (0, 40))
+    eq("id found on the items page", feed["sellerId_from"], "items page")
+    eq("feed URL", feed["url"], "https://www.avito.ru/brands/seller1/all?sellerId=" + FAKE_SELLER_HASH)
+
+
+def test_the_wait_wall_is_a_refusal_not_a_challenge():
+    """Measured 2026-10-08: a third firewall variant with neither a captcha
+    form nor a proof-of-work — «подождите немного и обновите страницу». It
+    does not clear in place; the exit has to change."""
+    import product_parser as P
+    html = fixture("wall_wait.html")
+    eq("wait-wall -> blocked", P.detect_page_state(html, url=LISTING), "blocked")
+    eq("and with its 429", P.detect_page_state(html, status=429, url=LISTING), "blocked")
+    import page_flow
+    check("which rotates the exit", page_flow.should_rotate("blocked"))
+
+
+def test_a_solve_followed_by_another_wall_is_not_verified():
+    """The first version marked a solve `verified` as soon as the page was
+    'not the wall' — and on 2026-10-08 an accepted solve was followed by the
+    wait-wall while the metadata said verified."""
+    import browser_bridge
+    import captcha_solver
+    real = captcha_solver.solve_geetest_v4
+
+    def fake_solve(key, cid, url, proxy=None, **kw):
+        return {"captcha_id": cid, "lot_number": "l", "pass_token": "p", "gen_time": "1",
+                "captcha_output": "o", "_cost": "0.00299", "_task_id": 1}
+    captcha_solver.solve_geetest_v4 = fake_solve
+    try:
+        d = FakeDriver([fixture("wall_captcha.html")], after_js=fixture("wall_wait.html"))
+        with tempfile.TemporaryDirectory() as tmp:
+            rc = _quiet(browser_bridge.run, _args(out=os.path.join(tmp, "o"), twocaptcha_key="k",
+                                                  solver_proxy=PLACEHOLDER_PROXY), d)
+            solve = json.load(open(os.path.join(tmp, "o.latest_attempt.meta.json")))[
+                "transport_facts"]["solves"][0]
+    finally:
+        captcha_solver.solve_geetest_v4 = real
+    eq("solve followed by the wait-wall -> blocked (3)", rc, 3)
+    eq("NOT verified", solve["verified"], False)
+    eq("and says what came instead", solve.get("after_submit"), "blocked")
+
+
 def test_a_solver_failure_is_a_warning_not_a_crash():
     import browser_bridge
     import captcha_solver
     real = captcha_solver.solve_geetest_v4
 
     def failing(*a, **k):
-        raise captcha_solver.SolverError("ERROR_CAPTCHA_UNSOLVABLE")
+        raise captcha_solver.SolverError("getTaskResult: ERROR_CAPTCHA_UNSOLVABLE (task 84066204532)",
+                                         task_id=84066204532, error_code="ERROR_CAPTCHA_UNSOLVABLE")
     captcha_solver.solve_geetest_v4 = failing
     try:
         with tempfile.TemporaryDirectory() as tmp:
@@ -542,9 +832,13 @@ def test_a_solver_failure_is_a_warning_not_a_crash():
                         _args(out=os.path.join(tmp, "o"), twocaptcha_key="k",
                               solver_proxy=PLACEHOLDER_PROXY),
                         FakeDriver([fixture("wall_captcha.html")]))
+            solve = json.load(open(os.path.join(tmp, "o.latest_attempt.meta.json")))[
+                "transport_facts"]["solves"][0]
     finally:
         captcha_solver.solve_geetest_v4 = real
     eq("solver failure -> blocked (3), not crash (1)", rc, 3)
+    eq("the failed solve is traceable: task id and 2Captcha's own code",
+       (solve["task_id"], solve["error_code"]), (84066204532, "ERROR_CAPTCHA_UNSOLVABLE"))
 
 
 def test_a_dead_exit_rotates_a_local_browser():
@@ -554,10 +848,14 @@ def test_a_dead_exit_rotates_a_local_browser():
     args = _args(proxy=GATEWAY_PROXY + "", proxy_block_retries=1)
     args.proxy = args.proxy.replace("region-RU", "region-RU-session-abcdefghi")
     args.solver_proxy = args.proxy
+    err = io.StringIO()
     with tempfile.TemporaryDirectory() as tmp:
         args.out = os.path.join(tmp, "o")
-        rc = _quiet(browser_bridge.run, args, d)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = browser_bridge.run(args, d)
     eq("a dead exit was replaced and the page fetched", rc, 0)
+    check("the rotation names Chromium's error, not a URL fragment",
+          "the exit failed (ERR_CONNECTION_CLOSED)" in err.getvalue(), "(got %r)" % err.getvalue()[-200:])
     eq("a fresh browser was started", d.starts, 2)
     check("the solver follows the browser to the new exit", args.solver_proxy == args.proxy)
     check("on a NEW session", "session-abcdefghi" not in args.proxy)
@@ -909,7 +1207,8 @@ def test_engine_parity():
             continue
         drivers = [v for k, v in vars(module).items() if k.endswith("Driver") and isinstance(v, type)]
         check("%s defines one driver" % name, len(drivers) == 1)
-        for method in ("start", "navigate", "content", "count", "run_js", "sleep", "stop"):
+        for method in ("start", "navigate", "content", "count", "run_js", "scroll_to_bottom",
+                       "sleep", "stop"):
             check("%s.%s" % (name, method), callable(getattr(drivers[0], method, None)))
         check("%s has main()" % name, callable(getattr(module, "main", None)))
         d = drivers[0](_args())

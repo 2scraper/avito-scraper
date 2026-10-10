@@ -35,12 +35,21 @@ residential exit.
 
 avito.ru sits behind its own firewall, «Доступ ограничен: проблема с IP».
 Its own text says why: *too many requests from this address*. It answers in
-one of two ways:
+one of these ways:
 
 | What you meet | Status | What clears it |
 |---|---|---|
 | a proof-of-work page | 439 | the browser itself, in a few seconds — the page runs `/web/3/firewallPow/…` and reloads |
 | a captcha page, «Продолжить» → **GeeTest v4** slide puzzle | 429 | a solve submitted through the page's own form |
+| «подождите немного и обновите страницу» — no captcha, no proof-of-work | 429 | a different exit. Measured: this is what follows a **rejected** solution |
+
+The captcha page can carry two other captchas — Avito's own picture
+captcha and hCaptcha. The server picks one per request; **every request
+measured (2026-10-06 to 10-09) got GeeTest**, including the page's own
+"new picture" request. The picture captcha is implemented (`ImageToTextTask`)
+but has never been met live. hCaptcha is solved with `HCaptchaTask`
+(sitekey from the wall, through the browser's own exit) — likewise
+implemented from the wall's code and 2Captcha's task format, never met live.
 
 | Client | Result |
 |---|---|
@@ -181,9 +190,21 @@ largest size), `category_path`, `address`, `lat`, `lng`, `views_total`,
 
 `<out>.json`: `seller_name`, `seller_rating`, `seller_reviews`,
 `seller_since`, `subscribers`, `active_ads` (the profile's own counter),
-`listings_on_page`, `badges`. `<out>_listings.json`: the cards the profile
-page renders, as listing rows — **15 measured**, of 107–353 active; the rest
-load as the page scrolls and are not fetched by this version.
+`listings_on_page`, `badges`. `<out>_listings.json`: **all** the seller's
+listings, as listing rows, up to the profile's own counter or
+`--max-products`. The profile page renders 15; the rest come from the
+seller's feed (`/brands/<slug>/all?sellerId=…`), which the scraper opens,
+arms with its «Показать все» button and scrolls — 15 more per scroll.
+Measured 2026-10-09: **353 of 353** in 22 scrolls, every row priced.
+Compare `listings_on_page` with `active_ads` to see whether the feed was
+read to the end; `transport_facts.seller_feed` says why it stopped.
+
+**About robots.txt and the seller feed.** The scraper never requests a path
+avito.ru's robots.txt disallows. But scrolling the feed makes the PAGE'S OWN
+script fetch `/web/1/profile/items`, and `/web/` is disallowed for robots.
+That is a deliberate choice (owner, 2026-10-09) — the only way to a
+seller's listings beyond 15. Use `--max-products 15` to stay on the
+profile page alone.
 
 ### Seller names, and what is never collected
 
@@ -356,8 +377,10 @@ details, and does not message sellers. When avito.ru's firewall presents a
 captcha, the scraper solves it the way a visitor would — through the page's
 own form — with a solve you pay 2Captcha for.
 
-`robots.txt` is respected: the snapshot is in `robots_snapshot.py`, and URLs
-it disallows are refused before any request is made.
+`robots.txt` is respected for every URL the scraper requests: the snapshot
+is in `robots_snapshot.py`, and URLs it disallows are refused before any
+request is made. One exception is stated above: scrolling a seller's feed
+makes the page itself fetch the disallowed `/web/1/profile/items`.
 
 The firewall exists because of request volume. Default `--delay` is 2 seconds
 between pages, `--concurrency` above 1 is refused, and running hard from one

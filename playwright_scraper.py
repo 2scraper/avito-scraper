@@ -131,6 +131,12 @@ class PlaywrightDriver:
     def run_js(self, body):
         return self._page.evaluate("() => { %s }" % body)
 
+    def scroll_to_bottom(self):
+        """Scroll to the end of the document; return its height. A real
+        function object, not an evaluated string (CSP-safe, family rule)."""
+        return self._page.evaluate(
+            "() => { window.scrollTo(0, document.body.scrollHeight); return document.body.scrollHeight; }")
+
     def sleep(self, ms):
         self._page.wait_for_timeout(ms)
 
