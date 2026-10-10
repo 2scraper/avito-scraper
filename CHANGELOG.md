@@ -6,10 +6,11 @@ follow SemVer as closely as a CLI toolkit can: a **patch** means fixes, and a
 fix may change a default when the old one was wrong — such a change leads its
 entry in a blockquote.
 
-## [1.0.1] — 2026-10-07
+## [1.0.1] — 2026-10-10
 
-Fixes from an external audit of v1.0.0. Each finding was reproduced before
-it was fixed, and each now has a regression test.
+Fixes from an external audit of v1.0.0, and from live runs on 2026-10-08,
+-09 and -10. Each finding was reproduced before it was fixed, and each now
+has a regression test.
 
 > **Behaviour changes for existing users.**
 > * An **unexpected exception** now exits **1** (crash, traceback printed
@@ -18,6 +19,8 @@ it was fixed, and each now has a regression test.
 > * `diff_runs.py` now **refuses** two outputs when either has no readable
 >   `.meta.json`, or when they were written by different row schemas. Pass
 >   `--force` to compare anyway.
+> * `--mode seller` now exits **6** (partial) when it wrote fewer listings
+>   than the profile's own counter, instead of 0.
 
 ### Fixed
 
@@ -31,6 +34,52 @@ it was fixed, and each now has a regression test.
 * **No attempt metadata on a failed start or a crash.**
   `<out>.latest_attempt.meta.json` is now written on every ending, with
   `exit_code`, `error_class` and a masked `error_message`.
+* **A failed captcha solve is now traceable.** Every solve in
+  `transport_facts.solves` records the 2Captcha `task_id` and its own error
+  code (`ERROR_CAPTCHA_UNSOLVABLE`, `TIMEOUT`, …), and the solver waits 240 s
+  instead of 180 s: on 2026-10-08 2Captcha took 217–220 s to return
+  `ERROR_CAPTCHA_UNSOLVABLE` for this captcha, so the old wait abandoned
+  every task before its verdict and logged only "no solution".
+* **A third firewall variant** — «подождите немного и обновите страницу», no
+  captcha form, no proof-of-work, served right after an accepted solve
+  (measured 2026-10-08) — is now a refusal of the exit and rotates, instead
+  of being waited out as a challenge and reported blocked.
+* **A solve is `verified` only when the page actually came back.** The first
+  release marked it verified as soon as the document stopped being the wall,
+  which included that third variant. A solve that is followed by something
+  else records `after_submit`. A proof-of-work after a solve is waited out.
+* **The wall's other two captchas.** The page can show Avito's own picture
+  captcha or hCaptcha instead of GeeTest; the scraper now recognises which
+  one is showing and records it (`solves[].variant`). The picture captcha is
+  solved with `ImageToTextTask` and answered through the page's own field —
+  implemented from the wall's script, not yet met live (every measured
+  request was assigned GeeTest). hCaptcha is solved with `HCaptchaTask`
+  (sitekey from the wall, the browser's own exit, `enterprisePayload.rqdata`
+  only if the wall ever carries one) and its token submitted through
+  `#h-captcha-response` — also not yet met live. One live `HCaptchaTask` on
+  avito's sitekey (2026-10-09) was accepted by the API and returned
+  ERROR_CAPTCHA_UNSOLVABLE after 51 s: the request shape is right, a solved
+  token for this wall is not yet measured.
+* **`--mode seller` now returns all of a seller's listings**, not the 15
+  the profile renders: it opens the seller's feed, presses «Показать все»
+  and scrolls until the profile's own counter or `--max-products`
+  (measured: 353 of 353). The feed's scroll makes the page fetch
+  `/web/1/profile/items`, which robots.txt disallows — README says so; this
+  is a deliberate choice. `--max-products 15` keeps to the profile page.
+* **A recommendation carousel was read as search results.** On 2026-10-10
+  `?q=yeezy` page 1 carried a «Подобрали для вас» block INSIDE the results
+  grid, with 31 cards of the same shape; page 1 came back with 82 rows, 32
+  of them unrelated. Cards inside `itemsCarousel` are no longer results.
+* **A seller run with fewer listings than the profile states is now
+  `partial` (exit 6).** A shop stating 7331 active listings was written as a
+  `complete` run of 12, because the profile's tabbed counter («Активные |
+  N») was not read and the feed never started. Both are fixed; a shop
+  profile without a `sellerId` now takes it from `/brands/<slug>/items`
+  (measured: 100 of 100 with `--max-products 100`).
+* The seller's name falls back to the profile heading when the page title
+  does not carry it (one fetch of two, 2026-10-10).
+* Rotation messages name Chromium's error (`ERR_CONNECTION_RESET`) instead of
+  a fragment of the URL.
 * **`schema_version`** now fingerprints the row class of the run's mode
   (names, order and types), not `Product`'s field names only.
 * Leftovers from the repositories this one was scaffolded from, in

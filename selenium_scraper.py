@@ -96,6 +96,12 @@ class SeleniumDriver:
         # snippet is written in that shape.
         return self._driver.execute_script(body)
 
+    def scroll_to_bottom(self):
+        """Scroll to the end of the document; return its height (Selenium's
+        execute_script takes a function BODY)."""
+        return self._driver.execute_script(
+            "window.scrollTo(0, document.body.scrollHeight); return document.body.scrollHeight;")
+
     def sleep(self, ms):
         time.sleep(ms / 1000.0)
 

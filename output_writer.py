@@ -129,9 +129,11 @@ class Seller:
     seller_reviews: Optional[int] = None
     seller_since: Optional[str] = None
     subscribers: Optional[int] = None
-    # The profile's own "Объявления N" counter — how many are LIVE. The page
-    # renders only the first 15 of them; `listings_on_page` says how many
-    # rows the companion listings file actually holds.
+    # The profile's own "Объявления N" counter — how many are LIVE. The
+    # profile page renders 15; the rest come from scrolling the seller's feed
+    # (up to this counter or --max-products). `listings_on_page` is how many
+    # rows the companion `<out>_listings` file actually holds — compare the
+    # two to see whether the feed was read to the end.
     active_ads: Optional[int] = None
     listings_on_page: Optional[int] = None
     badges: Optional[List[str]] = None

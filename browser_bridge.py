@@ -195,48 +195,84 @@ def solve_wall(driver, args, url: str, html: str, facts: Dict[str, Any], log=Non
         facts["walls_cleared_by"].append("autosolve")
         return fresh
 
-    captcha_id = P.geetest_captcha_id(html)
+    variant = P.wall_variant(html) or "geetest"
+    facts.setdefault("wall_variants", []).append(variant)
     key = getattr(args, "twocaptcha_key", None)
-    if not captcha_id:
-        print("[!] firewall captcha without a GeeTest id — this repo implements "
-              "GeeTest v4 only; reporting the page as blocked.", file=sys.stderr)
-        return None
     if not key:
-        print("[!] firewall captcha (GeeTest v4) and no TWOCAPTCHA_KEY — "
-              "continuing without solving.", file=sys.stderr)
+        print("[!] firewall captcha (%s) and no TWOCAPTCHA_KEY — continuing without "
+              "solving." % variant, file=sys.stderr)
         return None
     import captcha_solver
+    t0 = time.monotonic()
     try:
-        t0 = time.monotonic()
-        solution = captcha_solver.solve_geetest_v4(
-            key, captcha_id, url, proxy=getattr(args, "solver_proxy", None))
+        if variant == "image":
+            solution = captcha_solver.solve_image(key, P.wall_image_src(html))
+            submit = captcha_solver.submit_text_js_body(solution["text"])
+        elif variant == "hcaptcha":
+            solution = captcha_solver.solve_hcaptcha(
+                key, P.wall_hcaptcha_sitekey(html), url,
+                proxy=getattr(args, "solver_proxy", None), rqdata=P.wall_hcaptcha_rqdata(html))
+            submit = captcha_solver.submit_hcaptcha_js_body(solution["token"])
+        else:
+            captcha_id = P.geetest_captcha_id(html)
+            solution = captcha_solver.solve_geetest_v4(
+                key, captcha_id, url, proxy=getattr(args, "solver_proxy", None))
+            submit = captcha_solver.submit_js_body(solution)
     except captcha_solver.SolverError as exc:
-        print("[!] solver: %s" % mask_text(str(exc)), file=sys.stderr)
-        facts["solves"].append({"ok": False, "error": mask_text(str(exc))[:200]})
+        print("[!] solver (%s): %s" % (variant, mask_text(str(exc))), file=sys.stderr)
+        facts["solves"].append({"ok": False, "variant": variant,
+                                "error": mask_text(str(exc))[:200],
+                                "task_id": getattr(exc, "task_id", None),
+                                "error_code": getattr(exc, "error_code", None),
+                                "seconds": round(time.monotonic() - t0, 1)})
         return None
-    record = {"ok": True, "seconds": round(time.monotonic() - t0, 1),
-              "cost": solution.pop("_cost", None), "verified": False}
+    record = {"ok": True, "variant": variant, "seconds": round(time.monotonic() - t0, 1),
+              "cost": solution.pop("_cost", None), "task_id": solution.pop("_task_id", None),
+              "verified": False}
     facts["solves"].append(record)
     if log:
-        log("  GeeTest solved in %ss — submitting through the page's own form"
-            % record["seconds"])
+        log("  %s solved in %ss — submitting through the page's own form"
+            % ("GeeTest" if variant == "geetest" else "Image captcha", record["seconds"]))
     try:
-        submitted = driver.run_js(captcha_solver.submit_js_body(solution))
+        submitted = driver.run_js(submit)
     except Exception as exc:  # noqa: BLE001
         print("[!] could not submit the solution: %s" % mask_text(str(exc))[:200],
               file=sys.stderr)
         return None
     if not submitted:
         print("[!] the wall's form was gone before the solution arrived.", file=sys.stderr)
+    return _after_submit(driver, url, record, facts)
+
+
+def _after_submit(driver, url: str, record: Dict[str, Any], facts: Dict[str, Any]) -> Optional[str]:
+    """What the site served after a submitted solution.
+
+    `verified` means the PAGE came back — cards, an item, a profile, or an
+    honest empty listing. "No longer the wall" is not enough: the page passes
+    through an intermediate document while it reloads. And the wait-wall
+    («подождите немного и обновите страницу») is what the site serves after
+    a REJECTED solution: measured 2026-10-09, three deliberately wrong GeeTest
+    submissions were each answered `verified: false` and then that wall.
+    """
+    last = "captcha"
+    fresh = ""
     for _ in range(20):
         driver.sleep(1500)
         fresh = driver.content() or ""
-        if fresh and not P.is_wall(fresh):
+        if not fresh:
+            continue
+        last = P.detect_page_state(fresh, url=url)
+        if last in ("content", "empty"):
             record["verified"] = True
             facts["walls_cleared_by"].append("solver")
             return fresh
-    print("[!] the site did not accept the solved token (still walled).", file=sys.stderr)
-    return None
+        if last == "blocked":
+            break
+    record["after_submit"] = last
+    print("[!] after the solved captcha the site served %s, not the page%s."
+          % (last, " — the solution was rejected; rotating" if last == "blocked" else ""),
+          file=sys.stderr)
+    return fresh if last == "blocked" else None
 
 
 # ---------------------------------------------------------------------------
@@ -261,9 +297,10 @@ def fetch_page(driver, args, url: str, mode: str, facts: Dict[str, Any], log=Non
             if attempt == attempts:
                 raise BridgeError("navigation failed after %d attempt(s): %s: %s"
                                   % (attempts, type(exc).__name__, message)) from None
-            print("[i] navigation failed (%s) — retry %d/%d in %.0fs"
-                  % (type(exc).__name__, attempt, attempts - 1, args.retry_delay),
-                  file=sys.stderr)
+            code = re.search(r"(?:net::)?ERR_[A-Z_]+|Timeout \d+ms exceeded", str(exc))
+            print("[i] navigation failed (%s%s) — retry %d/%d in %.0fs"
+                  % (type(exc).__name__, ": " + code.group(0) if code else "",
+                     attempt, attempts - 1, args.retry_delay), file=sys.stderr)
             time.sleep(args.retry_delay)
 
     html = wait_for_content(driver, mode, url, page_flow.content_timeout_ms(mode), log=log)
@@ -284,6 +321,10 @@ def fetch_page(driver, args, url: str, mode: str, facts: Dict[str, Any], log=Non
         if fresh is not None:
             html = wait_for_content(driver, mode, url, page_flow.content_timeout_ms(mode), log=log)
             state = P.detect_page_state(html, url=url)
+            if state == "challenge":
+                # A proof-of-work after the solve clears itself like any other.
+                html = wait_out_challenge(driver, url, page_flow.CHALLENGE_SETTLE_MS, log=log)
+                state = P.detect_page_state(html, url=url)
 
     if state == "unknown":
         if log:
@@ -313,7 +354,8 @@ def fetch_with_rotation(driver, args, url: str, mode: str, facts, log=None) -> D
             # answered at once.
             if retries <= 0 or not _is_exit_failure(str(exc)) or not _fresh_exit_available(args):
                 raise
-            reason = "the exit failed (%s)" % str(exc).split(":")[-1].strip()[:60]
+            code = _EXIT_FAILURE_RE.search(str(exc))
+            reason = "the exit failed (%s)" % (code.group(0) if code else type(exc).__name__)
         else:
             if not page_flow.should_rotate(result["state"]) or retries <= 0 \
                     or not _fresh_exit_available(args):
@@ -628,16 +670,147 @@ def _run_seller(driver, args, url, facts, log):
         facts["failed_pages"].append(1)
         return [], []
     facts["pages_completed"] = 1
-    for row in listings:
-        row.page = 1
+    want = seller.active_ads or 0
+    if args.max_products:
+        want = min(want, args.max_products) if want else args.max_products
+    if want > len(listings):
+        more = _seller_feed(driver, args, url, result["html"], want, facts, log)
+        if more is not None:
+            listings = more
+    if args.max_products:
+        listings = listings[:args.max_products]
+    if want and len(listings) < want:
+        # 2026-10-10: a shop stating 7331 active listings came back as a
+        # `complete` run holding 12. Fewer than the profile's own counter is
+        # a partial view, and the run says so (exit 6).
+        facts["seller_listings_short"] = {"got": len(listings), "want": want}
+    seller.listings_on_page = len(listings)
+    for i, row in enumerate(listings, 1):
+        row.page, row.position = 1, i
     return [seller], listings
+
+
+# Scrolling the feed: a round adds 15 cards when the site answers (measured
+# 2026-10-09: 15 -> 195 in 12 rounds, ~2.7 s each). Three rounds with neither
+# a new card nor a taller page mean the feed is exhausted (family rule: the
+# terminating condition is data, and one still round is not enough).
+SELLER_SCROLL_PAUSE_MS = 2500
+SELLER_SCROLL_STILL_ROUNDS = 3
+SELLER_SCROLL_MAX_ROUNDS = 400
+SELLER_SHOW_ALL_SETTLE_MS = 3000
+SELLER_SHOW_ALL_MAX_CLICKS = 3
+
+
+def _seller_feed(driver, args, profile_url, profile_html, want, facts, log):
+    """All of a seller's listings, from the profile's full feed.
+
+    DECISION (owner, 2026-10-09): the profile page renders 15 listings; the
+    rest only arrive when the feed `/brands/<slug>/all?sellerId=…` is
+    scrolled, and the page's own script then fetches them from
+    `/web/1/profile/items`, a path avito.ru's robots.txt disallows. The scraper
+    never requests that path itself — it scrolls, and the site's page does —
+    but the purpose of the scroll is that data. README says so plainly.
+
+    Returns the parsed rows, or None (keep the profile's 15) when the feed
+    cannot be read.
+    """
+    seller_hash = P.seller_hash_id(profile_html)
+    feed = {"want": want, "rounds": 0, "cards": 0, "stop": None}
+    facts["seller_feed"] = feed
+    if not seller_hash:
+        # 2026-10-10, /brands/a3boots.shop: a shop's profile carries no
+        # sellerId at all; its `/brands/<slug>/items` page (robots: allowed)
+        # does, and the same `/all?sellerId=` feed then works for it.
+        items_url = P.seller_items_url(profile_url)
+        if P.robots_verdict(items_url)[0]:
+            time.sleep(args.delay)
+            found = fetch_with_rotation(driver, args, items_url, "seller", facts, log=log)
+            if found["state"] == "content":
+                seller_hash = P.seller_hash_id(found["html"])
+                feed["sellerId_from"] = "items page" if seller_hash else None
+    if not seller_hash:
+        feed["stop"] = "no sellerId on the profile"
+        print("[!] no sellerId on the profile — keeping its first listings only.", file=sys.stderr)
+        return None
+    feed_url = P.seller_all_url(profile_url, seller_hash)
+    feed["url"] = feed_url
+    allowed, rule = P.robots_verdict(feed_url)
+    if not allowed:
+        feed["stop"] = "robots: %s" % rule
+        return None
+    time.sleep(args.delay)
+    result = fetch_with_rotation(driver, args, feed_url, "seller", facts, log=log)
+    if result["state"] != "content":
+        feed["stop"] = "feed page: %s" % result["state"]
+        print("[!] the seller's feed came back %s — keeping the profile's listings only."
+              % result["state"], file=sys.stderr)
+        return None
+    # The page's script has to be up before the button does anything: a
+    # click straight after the HTML arrived (the cards are server-rendered,
+    # so readiness is immediate) did nothing on 2026-10-09; the same click
+    # 4 s later armed the feed. Wait, click, and click again if the feed
+    # does not move.
+    driver.sleep(SELLER_SHOW_ALL_SETTLE_MS)
+    feed["show_all_clicks"] = 0
+
+    def click_show_all():
+        try:
+            clicked = bool(driver.run_js(P.SELLER_SHOW_ALL_JS_BODY))
+        except Exception as exc:  # noqa: BLE001
+            feed["show_all_error"] = type(exc).__name__
+            return False
+        if clicked:
+            feed["show_all_clicks"] += 1
+            driver.sleep(SELLER_SCROLL_PAUSE_MS)
+        return clicked
+
+    click_show_all()
+    count = driver.count(P.SELLER_CARD_SELECTOR)
+    still, last = 0, (count, None)
+    while count < want and feed["rounds"] < SELLER_SCROLL_MAX_ROUNDS:
+        try:
+            height = driver.scroll_to_bottom()
+        except Exception as exc:  # noqa: BLE001
+            feed["stop"] = "scroll failed: %s" % type(exc).__name__
+            break
+        driver.sleep(SELLER_SCROLL_PAUSE_MS)
+        feed["rounds"] += 1
+        count = driver.count(P.SELLER_CARD_SELECTOR)
+        if (count, height) == last:
+            still += 1
+            if still == 2 and feed["show_all_clicks"] < SELLER_SHOW_ALL_MAX_CLICKS:
+                click_show_all()
+            if still >= SELLER_SCROLL_STILL_ROUNDS:
+                feed["stop"] = "feed stopped growing"
+                break
+        else:
+            still = 0
+        last = (count, height)
+        if log and feed["rounds"] % 5 == 0:
+            log("  seller feed: %d of %d listings after %d scrolls" % (count, want, feed["rounds"]))
+    html = driver.content() or ""
+    if P.is_wall(html):
+        # The feed can meet the firewall mid-scroll; what is on screen is gone.
+        feed["stop"] = "the firewall interrupted the feed"
+        print("[!] the firewall interrupted the seller feed — keeping the profile's listings only.",
+              file=sys.stderr)
+        return None
+    _, rows = P.parse_seller(html, url=profile_url)
+    rows = output_writer.dedupe_by_sku(rows, set())
+    feed["cards"] = len(rows)
+    feed["stop"] = feed["stop"] or ("reached %d" % want if len(rows) >= want else "feed ended")
+    if log:
+        log("  seller feed: %d listings (%s)" % (len(rows), feed["stop"]))
+    return rows if rows else None
 
 
 def _stop_reason(args, facts: Dict[str, Any], pages_requested: int) -> str:
     if facts["blocked"]:
         return "blocked"
     if args.mode == "seller":
-        return "single_page_mode" if facts["pages_completed"] else "no_profile"
+        if not facts["pages_completed"]:
+            return "no_profile"
+        return "seller_listings_short" if facts.get("seller_listings_short") else "single_page_mode"
     if facts["failed_pages"]:
         return "pages_failed"
     if facts.get("max_products_reached"):

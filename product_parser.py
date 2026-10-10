@@ -77,6 +77,7 @@ WALL_TITLE = "Доступ ограничен"
 _GEETEST_ID_RE = re.compile(r"captchaId\s*=\s*['\"]([0-9a-f]{32})['\"]")
 
 _FIREWALL_FORM_RE = re.compile(r"<form\b[^>]*\bjs-firewall-form\b", re.I)
+WALL_WAIT_TEXT = "подождите немного и обновите страницу"
 
 PRIVATE_SELLER_PLACEHOLDER = "Пользователь"
 
@@ -254,6 +255,59 @@ def results_cutoff(html: str) -> Optional[int]:
     return min(hits) if hits else None
 
 
+_WALL_BLOCKS = (("geetest", "#geetest_captcha"), ("image", "#inner-captcha"),
+                ("hcaptcha", "#h-captcha"))
+
+
+def wall_variant(html: str) -> Optional[str]:
+    """Which of the firewall's three captchas the page is SHOWING:
+    `geetest`, `image` (Avito's own text-from-picture captcha) or `hcaptcha`.
+
+    The server picks one per request (`/web/5/firewallCaptcha/get`) and the
+    page's script un-hides that block, so the visible one is the answer — an
+    inline `display: none` on the other two. Every measured request so far was
+    `geetest`; the other two are in the wall's code and are recognised from
+    its markup, not from a live capture.
+    """
+    if not is_wall(html) or not _FIREWALL_FORM_RE.search(html or ""):
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    for name, selector in _WALL_BLOCKS:
+        node = soup.select_one(selector)
+        if node is None:
+            continue
+        style = re.sub(r"\s+", "", (node.get("style") or "").lower())
+        if "display:none" not in style:
+            if name == "geetest" and not geetest_captcha_id(html):
+                continue
+            return name
+    return None
+
+
+def wall_hcaptcha_sitekey(html: str) -> Optional[str]:
+    """The wall's hCaptcha sitekey: `data-sitekey` of its `.h-captcha`
+    widget (measured: 070db171-ddb9-4c93-b7f6-d25d3c9d7e28)."""
+    m = re.search(r'class="h-captcha"[^>]*data-sitekey="([0-9a-f-]{36})"', html or "") or \
+        re.search(r'data-sitekey="([0-9a-f-]{36})"', html or "")
+    return m.group(1) if m else None
+
+
+def wall_hcaptcha_rqdata(html: str) -> Optional[str]:
+    """hCaptcha Enterprise's `rqdata`, when the wall carries one. Avito's did
+    not on any capture; kept so an Enterprise switch is not silently missed."""
+    m = re.search(r'["\']?rqdata["\']?\s*[:=]\s*["\']([^"\']{8,})["\']', html or "")
+    return m.group(1) if m else None
+
+
+def wall_image_src(html: str) -> Optional[str]:
+    """The image captcha's picture: `src` of `.js-form-captcha-image`, which
+    the wall's script sets from the server's answer (a `data:` URL)."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    img = soup.select_one("#inner-captcha .js-form-captcha-image") or soup.select_one("#inner-captcha img")
+    src = img.get("src") if img is not None else None
+    return src or None
+
+
 def _has_listing_cards(html: str) -> bool:
     html = html or ""
     if "item_list_with_filters/item(" in html:
@@ -297,8 +351,14 @@ def detect_page_state(html: str, status: Optional[int] = None,
         # The FORM element, not the substring: the wall's own script names
         # `.js-firewall-form` in a querySelector whether or not the form is
         # on the page.
-        if _FIREWALL_FORM_RE.search(html) and geetest_captcha_id(html):
+        if wall_variant(html):
             return "captcha"
+        # The third variant, measured 2026-10-08 right after an ACCEPTED
+        # GeeTest solve: no form, no proof-of-work, only «подождите немного и
+        # обновите страницу». Nothing clears it in place — a different exit
+        # does. Waiting it out as a "challenge" reported the page blocked.
+        if WALL_WAIT_TEXT in html:
+            return "blocked"
         return "challenge"
     if status in (403, 451):
         return "blocked"
@@ -604,6 +664,12 @@ def parse_listing(html: str, url: str = "", category: Optional[str] = None) -> L
         # Substitutes after «Похожие объявления…» are not results.
         results = set(re.findall(r'data-item-id="(\d+)"', (html or "")[:cutoff]))
         cards = [c for c in cards if c.get("data-item-id") in results]
+    # Measured 2026-10-10 (`/all/odezhda_obuv_aksessuary?q=yeezy`): a
+    # «Подобрали для вас» carousel sits INSIDE the results grid with 31 cards
+    # of the same `data-marker="item"` shape — personal recommendations, none
+    # of them in the state's `items` (they are its `extraBlockItems`). Taken
+    # as results they made page 1 hold 82 rows, 32 of them unrelated.
+    cards = [c for c in cards if c.find_parent(attrs={"data-marker": "itemsCarousel"}) is None]
     state = listing_state(html)
     by_id: Dict[str, dict] = {}
     order: List[str] = []
@@ -723,9 +789,58 @@ def parse_item(html: str, url: str = "", category: Optional[str] = None) -> Opti
 # Seller
 # ---------------------------------------------------------------------------
 
+_SELLER_HASH_RE = re.compile(r"sellerId(?:=|%3D)([0-9a-f]{32})")
+SELLER_CARD_SELECTOR = '[data-marker^="item_list_with_filters/item("][data-item-id]'
+
+
+def seller_hash_id(html: str) -> Optional[str]:
+    """The profile's `sellerId` — a 32-hex id in the profile's own links
+    (`/brands/<slug>/items/all?…&sellerId=…`). `hashedUserId` in the page
+    state was empty on both captured profiles."""
+    m = _SELLER_HASH_RE.search(html or "")
+    return m.group(1) if m else None
+
+
+# The feed's infinite scroll is ARMED by its «Показать все» control (a div,
+# not a link): measured 2026-10-09, scrolling the feed without the click left
+# it at 15; after the click every scroll added 15. A function BODY with an
+# explicit return — each engine wraps it in its own dialect.
+SELLER_SHOW_ALL_JS_BODY = (
+    "var b = document.querySelector('[data-marker=\"item_list_with_filters/show_all_button\"]');"
+    "if (!b) {"
+    "  var els = Array.prototype.filter.call(document.querySelectorAll('button'),"
+    "    function (e) { return (e.textContent || '').trim() === 'Показать все'; });"
+    "  b = els.length ? els[0] : null;"
+    "}"
+    "if (!b) { return false; }"
+    "b.scrollIntoView({block: 'center'});"
+    "b.click();"
+    "return true;"
+)
+
+
+def seller_items_url(seller_url: str) -> str:
+    """`/brands/<slug>/items` — where a shop's sellerId is published when its
+    profile carries none (measured 2026-10-10). Without `?s=`, which
+    robots.txt disallows and which the profile's own button adds."""
+    return "%s/brands/%s/items" % (BASE, seller_id_from_url(seller_url) or "")
+
+
+def seller_all_url(seller_url: str, seller_hash: str) -> str:
+    """The profile's full feed, which «Показать все» opens:
+    `/brands/<slug>/all?sellerId=<hash>`. robots.txt allows it; the feed's
+    own infinite scroll then fetches `/web/1/profile/items`, which robots.txt
+    disallows — see browser_bridge._seller_feed for that decision."""
+    slug = seller_id_from_url(seller_url) or ""
+    return "%s/brands/%s/all?sellerId=%s" % (BASE, slug, seller_hash)
+
+
 _SINCE_RE = re.compile(r"На Авито с ([^|∙·]+?)\s*(?:[|∙·]|$)")
 _SUBSCRIBERS_RE = re.compile(r"(\d[\d\s ]*)\s*подписчик")
-_ADS_RE = re.compile(r"Объявления\s*\|\s*(\d[\d\s ]*)")
+# Two profile layouts, both live: «Объявления | 353» (2026-10-09) and the
+# tabbed «Активные | 11 | Завершённые | 5» (2026-10-10, /brands/i1300361).
+# Missing the second left active_ads None, so the feed was never tried.
+_ADS_RE = re.compile(r"(?:Объявления|Активные)\s*\|\s*(\d[\d\s ]*)")
 
 
 def parse_seller(html: str, url: str = "") -> Tuple[Optional[Seller], List[Product]]:
@@ -741,7 +856,13 @@ def parse_seller(html: str, url: str = "") -> Tuple[Optional[Seller], List[Produ
     # Авито"; the name is everything before that suffix.
     m = re.match(r"(.+?)\s+-\s+официальная страница", _title(html))
     seller.seller_name = m.group(1).strip() if m else None
-    score = profile.select_one('[data-marker="profile/score"]')
+    if not seller.seller_name:
+        # The profile's own heading, `<h1 data-marker="name <name>">`. Two
+        # fetches of one profile 30 s apart (2026-10-10) gave the name once
+        # and None once from the title alone.
+        h1 = profile.select_one('h1[data-marker^="name"]') or soup.select_one('h1[data-marker^="name"]')
+        seller.seller_name = h1.get_text(" ", strip=True) or None if h1 is not None else None
+    score =profile.select_one('[data-marker="profile/score"]')
     seller.seller_rating = parse_number(score.get_text(strip=True)) if score is not None else None
     summary = profile.select_one('[data-marker="profile/summary"]')
     seller.seller_reviews = (count_before_word(summary.get_text(" ", strip=True))

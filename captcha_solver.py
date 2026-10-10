@@ -14,11 +14,16 @@ and Avito's own image captcha — and the server chooses.
     GeeTest v4, slide     implemented — task `GeeTestTask`, `version: 4`,
                           `initParameters.captcha_id`. captcha_id is
                           hard-coded in the wall: 2d9c743cf7d63dbc9db578a608196bcd
-    hCaptcha              this repo does not implement it yet (never served
-                          in a measured run)
-    Avito image captcha   this repo does not implement it yet; it appeared
-                          once, as the server's answer to a REJECTED GeeTest
-                          token (see below)
+    Avito image captcha   implemented — `ImageToTextTask` on the picture the
+                          wall shows, answer through `#form-input`. Not
+                          live-verified: the server never assigned it in a
+                          measured run (2026-10-06..09).
+    hCaptcha              implemented — `HCaptchaTask` (shape confirmed by
+                          2Captcha, 2026-10-09; the public /api-docs/hcaptcha
+                          page answered 404 that day), sitekey from the
+                          wall's `data-sitekey`, through the browser's own
+                          exit, token into `#h-captcha-response`. Not
+                          live-verified: never assigned in a measured run.
 
 These are statements about THIS repo, not about what 2Captcha can solve
 (2scraper family rule).
@@ -68,7 +73,17 @@ def _redact(text) -> str:
 
 class SolverError(RuntimeError):
     """The solver could not produce a usable answer. Always a WARNING to the
-    caller: the run continues and reports exit 3 if the page stays walled."""
+    caller: the run continues and reports exit 3 if the page stays walled.
+
+    Carries the 2Captcha `task_id` and `error_code` when there is one, so a
+    failed solve can be traced in the 2Captcha dashboard and support tickets —
+    a bare "no solution" was all the first release could say.
+    """
+
+    def __init__(self, message, task_id=None, error_code=None):
+        super().__init__(message)
+        self.task_id = task_id
+        self.error_code = error_code
 
 
 def proxy_task_fields(proxy: Optional[str]) -> dict:
@@ -114,7 +129,7 @@ def geetest_v4_task(captcha_id: str, page_url: str, proxy: Optional[str]) -> dic
 
 def solve_geetest_v4(api_key: str, captcha_id: str, page_url: str,
                      proxy: Optional[str] = None, allow_proxyless: bool = False,
-                     timeout_s: int = 180, poll_s: float = 5.0,
+                     timeout_s: int = 240, poll_s: float = 5.0,
                      session: Optional[requests.Session] = None) -> dict:
     """Solve and return the solution dict:
     `{captcha_id, lot_number, pass_token, gen_time, captcha_output}`.
@@ -129,41 +144,150 @@ def solve_geetest_v4(api_key: str, captcha_id: str, page_url: str,
             "from a different exit than the browser's (measured), so this "
             "would pay for a token the site refuses. Give the run the same "
             "session-pinned proxy the browser uses (AVITO_PROXY).")
-    http = session or requests.Session()
     task = geetest_v4_task(captcha_id, page_url, proxy)
+    # 240 s, not 180: measured 2026-10-08, 2Captcha took 217 s and 220 s to
+    # give up on this captcha (ERROR_CAPTCHA_UNSOLVABLE). A shorter wait
+    # abandons the task before its verdict and reports only "no solution".
+    solution, task_id, cost = _run_task(api_key, task, timeout_s, poll_s, session)
+    missing = [k for k in ("lot_number", "pass_token", "gen_time", "captcha_output")
+               if not solution.get(k)]
+    if missing:
+        raise SolverError("solution without %s (task %s)" % (", ".join(missing), task_id),
+                          task_id=task_id)
+    solution.setdefault("captcha_id", captcha_id)
+    solution["_cost"] = cost
+    solution["_task_id"] = task_id
+    return solution
+
+
+def _run_task(api_key: str, task: dict, timeout_s: float, poll_s: float,
+              session: Optional[requests.Session] = None):
+    """createTask + poll getTaskResult. Returns (solution, task_id, cost).
+    Every failure is a SolverError carrying the task id and 2Captcha's code."""
+    if not api_key:
+        raise SolverError("no TWOCAPTCHA_KEY")
+    http = session or requests.Session()
     try:
-        created = http.post(API + "/createTask",
-                            json={"clientKey": api_key, "task": task},
+        created = http.post(API + "/createTask", json={"clientKey": api_key, "task": task},
                             timeout=30).json()
     except Exception as exc:  # noqa: BLE001
         raise SolverError("createTask failed: %s: %s"
                           % (type(exc).__name__, _redact(exc))) from None
     if created.get("errorId"):
         raise SolverError("createTask: %s %s" % (created.get("errorCode"),
-                                                 _redact(created.get("errorDescription", ""))))
+                                                 _redact(created.get("errorDescription", ""))),
+                          error_code=created.get("errorCode"))
     task_id = created.get("taskId")
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         time.sleep(poll_s)
         try:
             got = http.post(API + "/getTaskResult",
-                            json={"clientKey": api_key, "taskId": task_id},
-                            timeout=30).json()
+                            json={"clientKey": api_key, "taskId": task_id}, timeout=30).json()
         except Exception as exc:  # noqa: BLE001
             raise SolverError("getTaskResult failed: %s: %s"
-                              % (type(exc).__name__, _redact(exc))) from None
+                              % (type(exc).__name__, _redact(exc)), task_id=task_id) from None
         if got.get("errorId"):
-            raise SolverError("getTaskResult: %s" % got.get("errorCode"))
+            raise SolverError("getTaskResult: %s (task %s)" % (got.get("errorCode"), task_id),
+                              task_id=task_id, error_code=got.get("errorCode"))
         if got.get("status") == "ready":
-            solution = dict(got.get("solution") or {})
-            missing = [k for k in ("lot_number", "pass_token", "gen_time", "captcha_output")
-                       if not solution.get(k)]
-            if missing:
-                raise SolverError("solution without %s" % ", ".join(missing))
-            solution.setdefault("captcha_id", captcha_id)
-            solution["_cost"] = got.get("cost")
-            return solution
-    raise SolverError("no solution within %ds" % timeout_s)
+            return dict(got.get("solution") or {}), task_id, got.get("cost")
+    raise SolverError("no solution within %ds (task %s)" % (timeout_s, task_id),
+                      task_id=task_id, error_code="TIMEOUT")
+
+
+def hcaptcha_task(sitekey: str, page_url: str, proxy: Optional[str],
+                  rqdata: Optional[str] = None) -> dict:
+    """`HCaptchaTask` (API v2). The shape was confirmed by 2Captcha on
+    2026-10-09 — its public page /api-docs/hcaptcha answered 404 that day, so
+    it is cited from the vendor, not from that page. `enterprisePayload.rqdata`
+    only for hCaptcha Enterprise; avito's wall carries no rqdata."""
+    if not re.fullmatch(r"[0-9a-f-]{36}", sitekey or ""):
+        raise SolverError("not an hCaptcha sitekey: %r" % (sitekey,))
+    task = {"type": "HCaptchaTask", "websiteURL": page_url, "websiteKey": sitekey,
+            "isInvisible": False}
+    task.update(proxy_task_fields(proxy))
+    if rqdata:
+        task["enterprisePayload"] = {"rqdata": rqdata}
+    return task
+
+
+def solve_hcaptcha(api_key: str, sitekey: str, page_url: str, proxy: Optional[str] = None,
+                   rqdata: Optional[str] = None, timeout_s: int = 240, poll_s: float = 5.0,
+                   session: Optional[requests.Session] = None) -> dict:
+    """Solve the wall's hCaptcha; returns `{token, _cost, _task_id}`.
+
+    Through the browser's own exit when there is one — the same rule GeeTest
+    taught here (a token from another IP was rejected). NOT live-verified:
+    the server never assigned hCaptcha in a measured run (2026-10-06..09).
+    """
+    solution, task_id, cost = _run_task(api_key, hcaptcha_task(sitekey, page_url, proxy, rqdata),
+                                        timeout_s, poll_s, session)
+    token = solution.get("gRecaptchaResponse") or solution.get("token")
+    if not token:
+        raise SolverError("hCaptcha solution without a token (task %s)" % task_id, task_id=task_id)
+    return {"token": token, "_cost": cost, "_task_id": task_id}
+
+
+SUBMIT_HCAPTCHA_JS_BODY = (
+    "var ta = document.querySelector('#h-captcha-response');"
+    "var form = document.querySelector('.js-firewall-form');"
+    "if (!ta || !form) { return false; }"
+    "ta.value = VALUE;"
+    "var g = document.querySelector('[name=g-recaptcha-response]'); if (g) { g.value = VALUE; }"
+    "form.dispatchEvent(new Event('submit'));"
+    "return true;"
+)
+
+
+def submit_hcaptcha_js_body(token: str) -> str:
+    """The token into `#h-captcha-response` — the field the wall's submit
+    handler reads — then the form's own submit handler."""
+    return SUBMIT_HCAPTCHA_JS_BODY.replace("VALUE", json.dumps(token))
+
+
+def image_task(image_src: str) -> dict:
+    """`ImageToTextTask` for the wall's own picture captcha
+    (https://2captcha.com/api-docs/normal-captcha). The wall sets the picture
+    as a `data:` URL; only that form is accepted here — anything else would
+    mean fetching an image outside the browser's session."""
+    if not image_src or not image_src.startswith("data:image") or "," not in image_src:
+        raise SolverError("image captcha without a data: URL picture")
+    return {"type": "ImageToTextTask", "body": image_src.split(",", 1)[1], "case": False}
+
+
+def solve_image(api_key: str, image_src: str, timeout_s: int = 120, poll_s: float = 4.0,
+                session: Optional[requests.Session] = None) -> dict:
+    """Solve the wall's picture captcha; returns `{text, _cost, _task_id}`.
+
+    NOT live-verified: every firewall request measured (2026-10-06..09)
+    was assigned GeeTest, including the page's own "refresh picture" request.
+    The task type and the submit path come from 2Captcha's documentation and
+    the wall's own script (`#form-input`, then the form's submit handler).
+    No proxy fields: an image task is a picture, not a session.
+    """
+    solution, task_id, cost = _run_task(api_key, image_task(image_src), timeout_s, poll_s,
+                                        session)
+    text = (solution.get("text") or "").strip()
+    if not text:
+        raise SolverError("empty answer (task %s)" % task_id, task_id=task_id)
+    return {"text": text, "_cost": cost, "_task_id": task_id}
+
+
+SUBMIT_TEXT_JS_BODY = (
+    "var inp = document.querySelector('#form-input');"
+    "var form = document.querySelector('.js-firewall-form');"
+    "if (!inp || !form) { return false; }"
+    "inp.value = VALUE;"
+    "form.dispatchEvent(new Event('submit'));"
+    "return true;"
+)
+
+
+def submit_text_js_body(text: str) -> str:
+    """The picture-captcha answer into the page's own `#form-input`, then the
+    form's own submit handler — the same path a visitor's Enter takes."""
+    return SUBMIT_TEXT_JS_BODY.replace("VALUE", json.dumps(text))
 
 
 def firewall_response_value(solution: dict) -> str:

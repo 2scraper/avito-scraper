@@ -14,6 +14,7 @@ apart from the fields scrubbed below.
 | `item_private.html` | item page, private seller | anonymised seller, masked IMEI dropped |
 | `seller.html` | `/brands/…` profile | profile counters, 2 of its cards |
 | `wall_captcha.html` | the firewall (HTTP 429) after «Продолжить» | GeeTest v4 form + `captchaId` |
+| `wall_wait.html` | the firewall's third variant, served right after an accepted solve (2026-10-08) | «подождите немного и обновите страницу» → `blocked`; title and text only, SVG and script removed |
 
 ## Not verbatim
 

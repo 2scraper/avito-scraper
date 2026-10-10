@@ -113,6 +113,11 @@ class PuppeteerDriver:
     def run_js(self, body):
         return self._run(self._page.evaluate("() => { %s }" % body))
 
+    def scroll_to_bottom(self):
+        """Scroll to the end of the document; return its height."""
+        return self._run(self._page.evaluate(
+            "() => { window.scrollTo(0, document.body.scrollHeight); return document.body.scrollHeight; }"))
+
     def sleep(self, ms):
         self._run(asyncio.sleep(ms / 1000.0))
 
