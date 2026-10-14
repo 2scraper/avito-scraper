@@ -440,12 +440,31 @@ def _new_facts(driver, args) -> Dict[str, Any]:
     }
 
 
+class UsageError(SystemExit):
+    """A run refused before it fetched anything: exit 2, like argparse.
+
+    Raised as `SystemExit("message")` these used to exit 1, which the exit
+    table calls a crash. `str()` is the message; the exit code is 2.
+    """
+
+    def __init__(self, message: str):
+        super().__init__(2)
+        self.message = message
+
+    def __str__(self) -> str:
+        return self.message
+
+
 def _input_urls(args) -> List[str]:
     # `--url` is repeatable; AVITO_URL from .env arrives as one string.
     urls = [args.url] if isinstance(args.url, str) else list(args.url or [])
     if getattr(args, "from_file", None):
-        with open(args.from_file, encoding="utf-8") as handle:
-            data = json.load(handle)
+        try:
+            with open(args.from_file, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError) as exc:
+            raise UsageError("cannot read --from %s: %s"
+                             % (args.from_file, exc)) from None
         for row in data if isinstance(data, list) else []:
             if isinstance(row, dict) and row.get("url"):
                 urls.append(row["url"])
@@ -459,31 +478,40 @@ def _input_urls(args) -> List[str]:
 
 def _check_urls(urls: List[str], mode: str) -> None:
     if not urls:
-        raise SystemExit("nothing to fetch: pass --url (repeatable) or --from FILE.json")
+        raise UsageError("nothing to fetch: pass --url (repeatable) or --from FILE.json")
     for u in urls:
         ok, reason = P.supported_host(u)
         if not ok:
-            raise SystemExit("refusing %s: %s" % (u, reason))
+            raise UsageError("refusing %s: %s" % (u, reason))
         allowed, rule = P.robots_verdict(u)
         if not allowed:
-            raise SystemExit("refusing %s: avito.ru's robots.txt says %s. Narrow a "
+            raise UsageError("refusing %s: avito.ru's robots.txt says %s. Narrow a "
                              "listing by its PATH (city / category), not by "
                              "sort or filter parameters." % (u, rule))
         kind = P.page_kind(u)
         if kind != mode:
-            raise SystemExit("refusing %s: that is %s page, not a %s page — use "
+            raise UsageError("refusing %s: that is %s page, not a %s page — use "
                              "--mode %s" % (u, "an item" if kind == "item" else "a " + kind,
                                             mode, kind))
+
+
+def _validated_urls(args) -> List[str]:
+    urls = _input_urls(args)
+    _check_urls(urls, args.mode)
+    if args.mode != "item" and len(urls) > 1:
+        raise UsageError("--mode %s takes one --url per run" % args.mode)
+    return urls
 
 
 def run(args, driver) -> int:
     """Drive one browser engine end to end and return its exit code."""
     log = (lambda m: print(m, file=sys.stderr)) if getattr(args, "verbose", False) \
         else (lambda m: None)
-    urls = _input_urls(args)
-    _check_urls(urls, args.mode)
-    if args.mode != "item" and len(urls) > 1:
-        raise SystemExit("--mode %s takes one --url per run" % args.mode)
+    try:
+        urls = _validated_urls(args)
+    except UsageError as exc:
+        print("error: %s" % exc, file=sys.stderr)
+        raise
 
     facts = _new_facts(driver, args)
     rows: List[Any] = []
@@ -933,9 +961,23 @@ def build_parser(description: str):
     return p
 
 
-def parse_args(parser, argv=None):
+def parse_args(parser, argv=None, *, cdp_supported: bool = True):
     args = parser.parse_args(argv)
+    typed_cdp = args.cdp_endpoint
     env_config.apply(args)
+    if not cdp_supported and args.cdp_endpoint:
+        if typed_cdp:
+            parser.error(
+                "this engine cannot use --cdp-endpoint: chromedriver's "
+                "debuggerAddress takes a bare host:port and has nowhere to put "
+                "the endpoint's password. Use playwright_scraper.py or "
+                "puppeteer_scraper.py for the Scraping Browser API.")
+        # From .env: the file is shared by all three engines, so it is not a
+        # request for THIS one. Say so and launch a local browser.
+        print("[i] ignoring AVITO_CDP_ENDPOINT from the environment: this "
+              "engine cannot use the Scraping Browser API; launching a local "
+              "browser.", file=sys.stderr)
+        args.cdp_endpoint = None
     if args.concurrency > 1:
         parser.error(
             "--concurrency above 1 is refused on avito.ru: its firewall is a "
@@ -945,6 +987,12 @@ def parse_args(parser, argv=None):
             "processes on different exits instead.")
     if args.from_file and args.mode != "item":
         parser.error("--from is for --mode item")
+    # The URL checks run here too, so a wrong host, a robots-disallowed URL
+    # or the wrong --mode is an argparse error (exit 2), before any browser.
+    try:
+        _validated_urls(args)
+    except UsageError as exc:
+        parser.error(str(exc))
 
     if args.cdp_endpoint:
         # Never applied to the remote browser — it brings its own exit.

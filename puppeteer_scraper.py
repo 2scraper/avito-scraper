@@ -23,8 +23,11 @@ from urllib.parse import urlparse
 import browser_bridge
 
 # Module level, so the offline suite can skip this engine when pyppeteer is
-# absent instead of importing cleanly and failing on first launch (§10).
+# absent instead of importing cleanly and failing on first launch.
 from pyppeteer import connect, launch
+
+
+CDP_CONNECT_TIMEOUT_S = 30
 
 
 class PuppeteerDriver:
@@ -48,7 +51,11 @@ class PuppeteerDriver:
         self._loop.set_exception_handler(_quiet_detach)
         if self.args.cdp_endpoint:
             try:
-                self._browser = self._run(connect(browserWSEndpoint=self.args.cdp_endpoint))
+                # Bounded: a handshake the service rejects never resolves pyppeteer's
+                # connect future, so without a timeout the run hangs.
+                self._browser = self._run(asyncio.wait_for(
+                    connect(browserWSEndpoint=self.args.cdp_endpoint),
+                    timeout=CDP_CONNECT_TIMEOUT_S))
             except Exception as exc:
                 raise browser_bridge.BridgeError(
                     "could not connect over CDP: %s: %s"

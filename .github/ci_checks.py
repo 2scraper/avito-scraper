@@ -103,7 +103,8 @@ def sample_check(prefix="sample_output"):
 
 
 def secret_check():
-    """Delegate to tools/scan_secrets.py — ONE scanner, not two (§21)."""
+    """Delegate to tools/scan_secrets.py — ONE scanner, not two, so CI and
+    the git hooks cannot disagree about what is a secret."""
     result = subprocess.run(
         [sys.executable, str(REPO / "tools" / "scan_secrets.py"), "--worktree"],
         capture_output=True, text=True, cwd=REPO)

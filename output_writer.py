@@ -35,7 +35,7 @@ import hashlib
 import json
 from dataclasses import dataclass, asdict, field, fields
 from datetime import datetime, timezone
-from typing import Optional, List, Set, Sequence, Any, Dict, Type
+from typing import Optional, List, Set, Sequence, Any, Dict, Tuple, Type
 
 
 SOURCE_DEFAULT = "avito.ru"
@@ -207,6 +207,16 @@ def _atomic_write(path: str, text: str) -> None:
     handle_fd, tmp = tempfile.mkstemp(dir=directory, prefix=".tmp-",
                                       suffix=os.path.basename(path))
     try:
+        # mkstemp creates 0600 and os.replace keeps it, which made every
+        # output owner-only. A new file gets what open() would have given it
+        # (0o666 under the umask); an existing file keeps its own mode.
+        try:
+            mode = os.stat(path).st_mode & 0o7777
+        except FileNotFoundError:
+            umask = os.umask(0)
+            os.umask(umask)
+            mode = 0o666 & ~umask
+        os.chmod(tmp, mode)
         with os.fdopen(handle_fd, "w", encoding="utf-8", newline="") as handle:
             handle.write(text)
             handle.flush()
@@ -225,8 +235,28 @@ def write_json(rows: Sequence[Any], path: str) -> None:
     _atomic_write(path, payload + "\n")
 
 
-def write_csv(rows: Sequence[Any], path: str, row_cls: Type = Product) -> None:
-    """CSV with the same field order as JSON.
+# A spreadsheet runs a cell that starts with one of these as a formula, and
+# titles, locations and seller names are written by whoever posted the ad.
+FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+def _csv_cell(v: Any) -> Tuple[Any, bool]:
+    """Serialise one value for CSV; return it and whether it was escaped.
+
+    Only STRINGS are escaped, and only after a list or dict has been joined
+    into one: `-5` stays a number so sums over the column keep working, while
+    a joined list whose first element looks like a formula is text and is
+    caught. JSON output is never touched.
+    """
+    v = _csv_value(v)
+    if isinstance(v, str) and v.startswith(FORMULA_PREFIXES):
+        return "'" + v, True
+    return v, False
+
+
+def write_csv(rows: Sequence[Any], path: str, row_cls: Type = Product) -> int:
+    """CSV with the same field order as JSON; return how many cells were
+    prefixed with an apostrophe to stop a spreadsheet running them.
 
     An EMPTY result still carries its header, so a consumer reads a table with
     no rows instead of failing on a zero-byte file.
@@ -236,9 +266,15 @@ def write_csv(rows: Sequence[Any], path: str, row_cls: Type = Product) -> None:
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=names, extrasaction="ignore")
     writer.writeheader()
+    escaped = 0
     for row in rows:
-        writer.writerow({k: _csv_value(v) for k, v in asdict(row).items()})
+        out = {}
+        for k, v in asdict(row).items():
+            out[k], hit = _csv_cell(v)
+            escaped += hit
+        writer.writerow(out)
     _atomic_write(path, buffer.getvalue())
+    return escaped
 
 
 EXIT_NO_PRODUCTS = 4
@@ -253,34 +289,20 @@ EXIT_BLOCKED = 3
 # Exit code for a run that gathered SOME rows and then stopped early.
 EXIT_PARTIAL = 6
 
-# Exit code for a failure in one of THIS PROJECT's own 2Captcha-product calls
-# -- the Fingerprint API rejecting a request (bad key, bad --tags, rate
-# limit), or a Scraping Browser CDP connection failing (e.g. profile_locked)
-# -- as opposed to EXIT_BLOCKED (the TARGET SITE refusing a page) or an
-# uncaught crash (1). Per the 2scraper family exit-code contract ("5" =
-# "remote API error"). Deliberately NOT what a captcha-solve failure gets:
-# per that same document's captcha section, a solver error is a WARNING that
-# lets the run continue (see captcha_solver.py and each engine's
-# handle_captcha_if_present) -- exit 5 is for calls the user explicitly
-# opted into (--fingerprint, --cdp-endpoint) where silently continuing
-# without them would hide a billing/plan/profile-lock problem rather than a
-# page the site declined to serve.
+# Exit code for a run that holds NO rows because the content was never
+# obtained: a Scraping Browser connection that failed (e.g. profile_locked),
+# a browser that never started, a navigation that timed out on every try, a
+# dead or unauthenticated proxy, a page that failed, an item or profile that
+# never parsed. As opposed to EXIT_BLOCKED (the site refused the page),
+# EXIT_NO_PRODUCTS (the listing was read and is empty) and an uncaught crash
+# (1). A captcha-solve failure is not this: it is a warning, and the run
+# continues to report what the page really was.
 EXIT_REMOTE_API_ERROR = 5
 
 
 class RemoteAPIError(RuntimeError):
-    """A 2Captcha product call (Fingerprint API, Scraping Browser CDP
-    connect) failed on its own terms, not the target site blocking a page.
-
-    Raised by fingerprint_client.get_fingerprint and by each engine's
-    --cdp-endpoint connect path; caught once at each engine's entry point
-    and mapped to EXIT_REMOTE_API_ERROR, so the three engines cannot drift
-    on which of 1 (crash) / 3 (blocked) / 5 (remote API error) a given
-    failure gets -- before this, both paths raised a bare RuntimeError with
-    no engine catching it, so either failure reached the interpreter as an
-    unhandled exception and exited 1 (a raw traceback, no run-metadata
-    sidecar) regardless of which one it actually was.
-    """
+    """A 2Captcha product call failed on its own terms, as opposed to the
+    target site blocking a page. Mapped to EXIT_REMOTE_API_ERROR."""
 
 
 def write_run_meta(out_prefix: str, meta: dict, *, suffix: str = ".meta.json") -> str:
@@ -379,7 +401,8 @@ def run_meta(status: str, stop_reason: str, pages_requested: int,
 
 
 def save(rows: Sequence[Any], out_prefix: str, fmt: str,
-         allow_empty: bool = False, row_cls: Type = Product) -> int:
+         allow_empty: bool = False, row_cls: Type = Product,
+         stats: Optional[dict] = None) -> int:
     """Write JSON/CSV and return a process exit code.
 
     On zero rows, nothing is written at all unless `allow_empty` — see the
@@ -396,7 +419,9 @@ def save(rows: Sequence[Any], out_prefix: str, fmt: str,
         write_json(rows, f"{out_prefix}.json")
         print(f"[+] Saved {len(rows)} row(s) -> {out_prefix}.json")
     if fmt in ("csv", "both"):
-        write_csv(rows, f"{out_prefix}.csv", row_cls=row_cls)
+        escaped = write_csv(rows, f"{out_prefix}.csv", row_cls=row_cls)
+        if stats is not None:
+            stats["csv_cells_escaped"] = escaped
         print(f"[+] Saved {len(rows)} row(s) -> {out_prefix}.csv")
     return 0 if rows else EXIT_NO_PRODUCTS
 
@@ -417,14 +442,22 @@ def finish_run(rows: Sequence[Any], out_prefix: str, fmt: str,
     """Write output + the run-metadata sidecar; return the exit code.
 
     Shared by all three browser engines so the status/exit-code mapping
-    cannot drift between them. See a sibling repo's output_writer.py for
-    the full rationale; the logic here is unchanged.
+    cannot drift between them.
+
+    Zero rows means one of three things, and each gets its own code: the
+    site refused (3), the listing was read to its end and really is empty
+    (4, only for the stop reasons in COMPLETE_STOP_REASONS), or the content
+    was never obtained (5) — a page that failed, a profile that never
+    parsed, any stop reason not known to be complete. An unknown reason
+    must not read as an empty catalogue.
     """
     import uuid
     complete = stop_reason in COMPLETE_STOP_REASONS
     row_cls = ROW_CLASS_BY_MODE.get(mode, Product)
     run_id = uuid.uuid4().hex[:12]
-    rc = save(rows, out_prefix, fmt, allow_empty=allow_empty, row_cls=row_cls)
+    stats: dict = {}
+    rc = save(rows, out_prefix, fmt, allow_empty=allow_empty, row_cls=row_cls,
+              stats=stats)
     wrote_output = bool(rows) or allow_empty
 
     status = "complete" if (rows and complete) else ("partial" if rows else "failed")
@@ -435,6 +468,9 @@ def finish_run(rows: Sequence[Any], out_prefix: str, fmt: str,
         start_url=start_url, final_url=final_url, products=len(rows))
     base["run_id"] = run_id
     base["blocked"] = bool(blocked)
+    if "csv_cells_escaped" in stats:
+        # Declared, so CSV and JSON differing in those cells is not a surprise.
+        base["csv_cells_escaped"] = stats["csv_cells_escaped"]
     if extra:
         base["transport_facts"] = extra
 
@@ -447,7 +483,9 @@ def finish_run(rows: Sequence[Any], out_prefix: str, fmt: str,
     write_attempt_meta(out_prefix, dict(base, data_updated=bool(wrote_output)))
 
     if not rows:
-        return EXIT_BLOCKED if blocked else rc
+        if blocked:
+            return EXIT_BLOCKED
+        return rc if complete else EXIT_REMOTE_API_ERROR
     if not complete:
         print(f"[!] Partial run: stopped after {pages_completed} of "
               f"{pages_requested} page(s) ({stop_reason}). The output holds "

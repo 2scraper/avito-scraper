@@ -252,7 +252,7 @@ you operate applies to that data — in Russia, Federal Law 152-FZ.
 |---|---|---|
 | `playwright_scraper.py` | yes — **recommended** | yes |
 | `puppeteer_scraper.py` | yes | yes |
-| `selenium_scraper.py` | **no** — chromedriver's `debuggerAddress` has nowhere to put the endpoint's password | yes |
+| `selenium_scraper.py` | **no** — chromedriver's `debuggerAddress` has nowhere to put the endpoint's password (a typed `--cdp-endpoint` exits 2; `AVITO_CDP_ENDPOINT` from `.env` is ignored with a notice) | yes |
 
 All three share one CLI and one run loop (`browser_bridge.py`), so they agree
 on exit codes and on when to wait, solve or rotate. Live-verified on
@@ -277,17 +277,23 @@ pyppeteer is effectively unmaintained; it is here for parity.
 |---|---|
 | `0` | Complete |
 | `1` | Crash — an unexpected exception: a bug, not the site and not the transport (traceback printed, credentials masked) |
-| `2` | Bad usage — wrong host, wrong `--mode` for the URL, a robots-disallowed URL |
+| `2` | Bad usage — wrong host, wrong `--mode` for the URL, a robots-disallowed URL, an unreadable `--from` file |
 | `3` | Blocked — the firewall stayed up after every rung |
-| `4` | Zero results — including a search with no matches |
-| `5` | Transport error — **our** plumbing: a navigation timeout, a dead exit, `profile_locked`, `proxy_error` |
+| `4` | Zero results — the listing was read to its end and is empty, including a search with no matches |
+| `5` | Content never obtained — **our** plumbing (a navigation timeout, a dead exit, `profile_locked`, `proxy_error`), or zero rows for any reason other than a listing read to its end: a failed page, an item page with no item on it, a seller profile that never parsed |
 | `6` | Partial — some pages fetched, then stopped |
 
-`3` and `5` mean different things: `5` says the site was never reached, so
-the answer is "run it again" or "rebuild the endpoint", not the firewall.
+`3` and `5` mean different things: `5` says the content was never obtained,
+so the answer is "run it again", "rebuild the endpoint" or "check the URL",
+not the firewall. `4` is only for a run that read the listing to its end.
 
 A run that finds nothing writes nothing — last night's output is not replaced
-with `[]` (`--allow-empty` is the opt-out). `<out>.meta.json` describes the
+with `[]` (`--allow-empty` is the opt-out). Output files get the mode
+`open()` would give them under your umask, and an existing file keeps its
+own. In the CSV, a text cell starting with `=`, `+`, `-`, `@`, a tab or a
+line break is prefixed with `'` so a spreadsheet does not run it as a
+formula; the JSON keeps the site's text, and `csv_cells_escaped` in the
+sidecar counts the cells that differ. `<out>.meta.json` describes the
 data beside it; `<out>.latest_attempt.meta.json` is written on EVERY ending — success, block, transport error or crash, with `exit_code` and `error_class` — and
 records `transport_facts`: walls met, which rung cleared each, every solve
 with its time and cost, rotations, and auto-solve events.

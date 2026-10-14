@@ -64,7 +64,7 @@ jobs:
         run: python3 .github/ci_checks.py --wheel-check
 
       - name: No credentials committed
-        # THE SHIPPED CHECK — one scanner, shared with the git hooks (§21).
+        # THE SHIPPED CHECK — one scanner, shared with the git hooks.
         run: python3 .github/ci_checks.py --secret-check
 
   engine-smoke:
