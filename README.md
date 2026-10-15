@@ -18,12 +18,14 @@ actually needs.
 [![engines](https://img.shields.io/badge/engines-Playwright%20%7C%20Selenium%20%7C%20pyppeteer%20%7C%20CDP-informational)](#engines)
 [![needs a Russian exit](https://img.shields.io/badge/needs-a%20Russian%20exit%20%2B%20a%20browser-orange)](#the-one-thing-you-actually-need)
 
-> **What the canary badge means.** The daily canary scrapes avito.ru only when
-> the repository holds the secrets for a Russian exit and a captcha key. This
-> public repository does not, so the canary takes its documented SKIP branch:
-> a green badge here says the workflow is healthy, **not** that avito.ru was
-> scraped today. Each skipped run says so in a warning. The live measurements
-> are in [Measured results](#measured-results), with their dates.
+> **What the canary badge means.** The daily canary scrapes three pages of
+> avito.ru through the Scraping Browser API on a Russian exit and is green only
+> when that run is complete and its rows pass the data checks. It needs the
+> secrets `TWOCAPTCHA_KEY` and `AVITO_PROXY` and the variable
+> `AVITO_BROWSER_ACCOUNT_ID`; without them it is **red**, naming what is
+> missing, rather than green without having scraped anything. A blocked run,
+> one that never reached the site, or zero rows is red too. The live
+> measurements are in [Measured results](#measured-results), with their dates.
 
 ---
 
@@ -252,7 +254,7 @@ you operate applies to that data — in Russia, Federal Law 152-FZ.
 |---|---|---|
 | `playwright_scraper.py` | yes — **recommended** | yes |
 | `puppeteer_scraper.py` | yes | yes |
-| `selenium_scraper.py` | **no** — chromedriver's `debuggerAddress` has nowhere to put the endpoint's password | yes |
+| `selenium_scraper.py` | **no** — chromedriver's `debuggerAddress` has nowhere to put the endpoint's password (a typed `--cdp-endpoint` exits 2; `AVITO_CDP_ENDPOINT` from `.env` is ignored with a notice) | yes |
 
 All three share one CLI and one run loop (`browser_bridge.py`), so they agree
 on exit codes and on when to wait, solve or rotate. Live-verified on
@@ -277,17 +279,27 @@ pyppeteer is effectively unmaintained; it is here for parity.
 |---|---|
 | `0` | Complete |
 | `1` | Crash — an unexpected exception: a bug, not the site and not the transport (traceback printed, credentials masked) |
-| `2` | Bad usage — wrong host, wrong `--mode` for the URL, a robots-disallowed URL |
+| `2` | Bad usage — wrong host, wrong `--mode` for the URL, a robots-disallowed URL, an unreadable `--from` file |
 | `3` | Blocked — the firewall stayed up after every rung |
-| `4` | Zero results — including a search with no matches |
-| `5` | Transport error — **our** plumbing: a navigation timeout, a dead exit, `profile_locked`, `proxy_error` |
+| `4` | Zero results — the listing was read to its end and is empty, including a search with no matches |
+| `5` | Content never obtained — **our** plumbing (a navigation timeout, a dead exit, `profile_locked`, `proxy_error`), or zero rows for any reason other than a listing read to its end: a failed page, an item page with no item on it, a seller profile that never parsed |
 | `6` | Partial — some pages fetched, then stopped |
 
-`3` and `5` mean different things: `5` says the site was never reached, so
-the answer is "run it again" or "rebuild the endpoint", not the firewall.
+A page buys at most one paid captcha solve per run
+(`page_flow.SOLVES_PER_PAGE`): a fresh exit re-fetches a page that stayed
+walled, but does not buy a second token for it.
+
+`3` and `5` mean different things: `5` says the content was never obtained,
+so the answer is "run it again", "rebuild the endpoint" or "check the URL",
+not the firewall. `4` is only for a run that read the listing to its end.
 
 A run that finds nothing writes nothing — last night's output is not replaced
-with `[]` (`--allow-empty` is the opt-out). `<out>.meta.json` describes the
+with `[]` (`--allow-empty` is the opt-out). Output files get the mode
+`open()` would give them under your umask, and an existing file keeps its
+own. In the CSV, a text cell starting with `=`, `+`, `-`, `@`, a tab or a
+line break is prefixed with `'` so a spreadsheet does not run it as a
+formula; the JSON keeps the site's text, and `csv_cells_escaped` in the
+sidecar counts the cells that differ. `<out>.meta.json` describes the
 data beside it; `<out>.latest_attempt.meta.json` is written on EVERY ending — success, block, transport error or crash, with `exit_code` and `error_class` — and
 records `transport_facts`: walls met, which rung cleared each, every solve
 with its time and cost, rotations, and auto-solve events.

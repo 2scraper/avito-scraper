@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import ast
 import contextlib
+import csv
 import dataclasses
 import inspect
 import io
@@ -976,6 +977,7 @@ def test_wrong_mode_and_robots_are_refused_before_fetching():
             check("refused: %s" % why, False)
         except SystemExit as exc:
             check("refused: %s" % why, "refusing" in str(exc))
+            eq("refused with exit 2: %s" % why, exc.code, 2)
 
 
 def test_cli_contract():
@@ -1262,7 +1264,7 @@ def test_gitignore_covers_every_env_variant_and_working_files():
 
 
 def test_fixtures_carry_no_session_or_personal_material():
-    """Guarded with PATTERNS, so the NEXT capture is caught too (§10)."""
+    """Guarded with PATTERNS, so the NEXT capture is caught too."""
     scan = _scanner()
     patterns = [
         ("a context token", re.compile(r"context=H4sI")),
@@ -1693,6 +1695,278 @@ def test_schema_version_is_per_mode():
     eq("three modes, three schema versions", len(set(versions.values())), 3)
     eq("scope carries the MODE's version", O.scope_fingerprint(LISTING, "item", 1)["schema_version"],
        versions["item"])
+
+
+def test_zero_rows_exit_by_stop_reason():
+    """0 rows is 4 only when the run is known to have read the listing to its
+    end; any other reason means the content was never obtained (5). An item
+    that no longer exists, or a profile that never parsed, used to exit 4."""
+    import output_writer as O
+    with tempfile.TemporaryDirectory() as tmp:
+        for reason, want in (("completed", 4), ("pagination_exhausted", 4),
+                             ("no_new_products", 4), ("single_page_mode", 4),
+                             ("pages_failed", 5), ("no_profile", 5),
+                             ("transport_error", 5), ("a_reason_added_later", 5)):
+            rc = _quiet(O.finish_run, [], os.path.join(tmp, reason), "json", False,
+                        blocked=False, stop_reason=reason, pages_requested=1,
+                        pages_completed=0, start_url=LISTING, final_url=LISTING)
+            eq("0 rows, stop_reason=%s -> exit %d" % (reason, want), rc, want)
+        rc = _quiet(O.finish_run, [], os.path.join(tmp, "b"), "json", False,
+                    blocked=True, stop_reason="blocked", pages_requested=1,
+                    pages_completed=0, start_url=LISTING, final_url=LISTING)
+        eq("0 rows, blocked -> exit 3", rc, 3)
+    import browser_bridge
+    gone = "<html><head><title>Ошибка 404</title></head><body>Такой страницы нет</body></html>"
+    with tempfile.TemporaryDirectory() as tmp:
+        rc = _quiet(browser_bridge.run, _args(mode="item", url=[ITEM_COMPANY],
+                                              out=os.path.join(tmp, "o")),
+                    FakeDriver([gone]))
+    eq("an item page with no item on it exits 5, not 4", rc, 5)
+
+
+def test_usage_errors_exit_2():
+    """README: exit 2 for a wrong host, a wrong --mode or a robots-disallowed
+    URL. They were SystemExit("message"), which exits 1."""
+    import browser_bridge
+    for argv, why in ((["--url", LISTING + "?s=104"], "robots-disallowed"),
+                      (["--url", "https://m.avito.ru/moskva"], "foreign host"),
+                      (["--url", ITEM_COMPANY], "item url in listing mode"),
+                      (["--mode", "item", "--from", "/nonexistent/rows.json"], "missing --from"),
+                      (["--url", LISTING, "--url", LISTING + "/x"], "two urls in listing mode")):
+        try:
+            _quiet(browser_bridge.parse_args, browser_bridge.build_parser("x"), argv)
+            check("parse_args refuses: %s" % why, False)
+        except SystemExit as exc:
+            eq("parse_args refuses with exit 2: %s" % why, exc.code, 2)
+    try:
+        _quiet(browser_bridge.run, _args(mode="item", url=None, from_file="/nonexistent.json"),
+               FakeDriver([]))
+        check("run() refuses an unreadable --from", False)
+    except SystemExit as exc:
+        eq("run() refuses an unreadable --from with exit 2", exc.code, 2)
+
+
+def test_output_file_modes():
+    """mkstemp creates 0600 and os.replace kept it: every output was
+    owner-only. New files follow the umask; an existing file keeps its mode."""
+    import output_writer as O
+    old = os.umask(0o022)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            for umask, want in ((0o022, 0o644), (0o002, 0o664), (0o077, 0o600)):
+                os.umask(umask)
+                path = os.path.join(tmp, "new_%o.json" % umask)
+                O.write_json([O.Product(sku="1")], path)
+                eq("new file under umask %03o is %03o" % (umask, want),
+                   oct(os.stat(path).st_mode & 0o777), oct(want))
+            os.umask(0o022)
+            path = os.path.join(tmp, "kept.json")
+            open(path, "w").close()
+            os.chmod(path, 0o664)
+            O.write_json([O.Product(sku="1")], path)
+            eq("an existing 664 file stays 664", oct(os.stat(path).st_mode & 0o777), oct(0o664))
+            _quiet(O.write_run_meta, os.path.join(tmp, "m"), {"status": "x"})
+            eq("the sidecar follows the umask too",
+               oct(os.stat(os.path.join(tmp, "m.meta.json")).st_mode & 0o777), oct(0o644))
+    finally:
+        os.umask(old)
+
+
+def test_csv_formula_cells_are_neutralised():
+    """Titles, locations and seller names are written by whoever posted the
+    ad. A CSV cell starting = + - @ TAB CR LF runs as a formula in a
+    spreadsheet; JSON keeps the site's bytes."""
+    import output_writer as O
+    row = O.Product(sku="1", title="=HYPERLINK(\"http://x\")", price=-5.0,
+                    currency="RUB", location="+79001234567")
+    with tempfile.TemporaryDirectory() as tmp:
+        prefix = os.path.join(tmp, "o")
+        _quiet(O.finish_run, [row], prefix, "both", False, blocked=False,
+               stop_reason="completed", pages_requested=1, pages_completed=1,
+               start_url=LISTING, final_url=LISTING, extra={"csv_cells_escaped": "caller"})
+        with open(prefix + ".csv", newline="", encoding="utf-8") as handle:
+            got = list(csv.DictReader(handle))[0]
+        data = json.load(open(prefix + ".json", encoding="utf-8"))[0]
+        meta = json.load(open(prefix + ".meta.json", encoding="utf-8"))
+    eq("title escaped in CSV", got["title"], "'=HYPERLINK(\"http://x\")")
+    eq("location escaped in CSV", got["location"], "'+79001234567")
+    eq("a negative NUMBER stays a number", got["price"], "-5.0")
+    eq("JSON keeps the site's bytes", data["title"], "=HYPERLINK(\"http://x\")")
+    eq("sidecar declares the count", meta.get("csv_cells_escaped"), 2)
+    eq("the caller's own extra is not overwritten",
+       meta["transport_facts"].get("csv_cells_escaped"), "caller")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "i.csv")
+        n = O.write_csv([O.Item(sku="1", images=["=1+1", "ok"], params={"a": "b"})],
+                        path, row_cls=O.Item)
+        with open(path, newline="", encoding="utf-8") as handle:
+            got = list(csv.DictReader(handle))[0]
+    eq("a joined list is escaped after joining", got["images"], "'=1+1 | ok")
+    eq("and counted", n, 1)
+
+
+def test_worktree_scan_reads_untracked_files_and_skips_venvs():
+    """--worktree read tracked files only, so an untracked key-holding file
+    was 'clean', and a tree with no git scanned 0 files and said 'clean'."""
+    import shutil
+    import subprocess
+    if not shutil.which("git"):
+        skip("worktree scan (git absent)")
+        return
+    scanner = os.path.join(HERE, "tools", "scan_secrets.py")
+    key = "".join("%x" % (i % 16) for i in range(7, 39))  # 32 hex, assembled
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = os.path.join(tmp, "build", "out", "r")
+        os.makedirs(os.path.join(repo, "myenv", "lib"))
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        open(os.path.join(repo, "ok.py"), "w").write("x = 1\n")
+        subprocess.run(["git", "-C", repo, "add", "ok.py"], check=True)
+        open(os.path.join(repo, "myenv", "pyvenv.cfg"), "w").write("home = /usr\n")
+        open(os.path.join(repo, "myenv", "lib", "vendored.py"), "w").write("# %s\n" % key)
+
+        def scan(cwd):
+            r = subprocess.run([sys.executable, scanner, "--worktree"], cwd=cwd,
+                               capture_output=True, text=True)
+            return r.returncode, r.stdout + r.stderr
+
+        rc, out = scan(repo)
+        eq("a venv (found by pyvenv.cfg) is not scanned", rc, 0)
+        open(os.path.join(repo, "notes.py"), "w").write("k = '%s'\n" % key)
+        rc, out = scan(repo)
+        check("an UNTRACKED file holding a key fails the scan",
+              rc == 1 and "notes.py" in out, "(rc=%s)" % rc)
+        os.remove(os.path.join(repo, "notes.py"))
+        open(os.path.join(repo, ".env.bak"), "w").write("TWOCAPTCHA_KEY=x\n")
+        rc, out = scan(repo)
+        check("an untracked .env backup fails the scan",
+              rc == 1 and ".env.bak" in out, "(rc=%s)" % rc)
+        bare = os.path.join(tmp, "nogit")
+        os.makedirs(bare)
+        rc, out = scan(bare)
+        check("a tree with no git fails loudly instead of reading as clean",
+              rc == 1 and "0 files" in out, "(rc=%s)" % rc)
+
+
+def test_selenium_cdp_endpoint_is_a_usage_question():
+    """Selenium cannot use the Scraping Browser. A typed --cdp-endpoint is a
+    usage error (2); the one in .env is shared by every engine and is ignored
+    with a notice. It used to reach start() and exit 5 'transport_error'."""
+    import browser_bridge
+    endpoint = "ws://u-zone-scraping_browser-country-ru:p@h:9222"
+    try:
+        _quiet(browser_bridge.parse_args, browser_bridge.build_parser("x"),
+               ["--url", LISTING, "--cdp-endpoint", endpoint], cdp_supported=False)
+        check("a typed --cdp-endpoint is refused", False)
+    except SystemExit as exc:
+        eq("a typed --cdp-endpoint is refused with exit 2", exc.code, 2)
+    saved = os.environ.get("AVITO_CDP_ENDPOINT")
+    os.environ["AVITO_CDP_ENDPOINT"] = endpoint
+    try:
+        args = _quiet(browser_bridge.parse_args, browser_bridge.build_parser("x"),
+                      ["--url", LISTING], cdp_supported=False)
+        eq("an endpoint from the environment is dropped", args.cdp_endpoint, None)
+        args = _quiet(browser_bridge.parse_args, browser_bridge.build_parser("x"),
+                      ["--url", LISTING])
+        check("and still used by an engine that can", bool(args.cdp_endpoint))
+    finally:
+        if saved is None:
+            os.environ.pop("AVITO_CDP_ENDPOINT", None)
+        else:
+            os.environ["AVITO_CDP_ENDPOINT"] = saved
+    body = open(os.path.join(HERE, "selenium_scraper.py"), encoding="utf-8").read()
+    check("selenium_scraper declares it cannot use CDP", "cdp_supported=False" in body)
+
+
+def test_no_private_citations_in_shipped_files():
+    """Public files must state their reasons in their own words. A pointer to
+    an internal document or a bare section number is unreachable to a reader.
+    The tokens are assembled so this file does not match itself."""
+    import re
+    tokens = ["CLAUDE" + ".md", "claude_" + "2scraper", "2scraper_repo" + "_rules",
+              "play" + "book " + "§", "template " + "§"]
+    section = re.compile("§" + r"\s*\d")
+    hits = []
+    for root, dirs, files in os.walk(HERE):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "node_modules")
+                   and not os.path.isfile(os.path.join(root, d, "pyvenv.cfg"))]
+        for name in files:
+            if not name.endswith((".py", ".md", ".yml", ".yaml", ".toml", ".txt",
+                                  ".cfg", ".example", ".json", ".csv", ".html")) \
+                    and name not in ("Dockerfile", ".gitignore", ".dockerignore",
+                                     "pre-commit", "pre-push"):
+                continue
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, HERE)
+            if rel.split(os.sep)[0] in ("live", "build", "dist"):
+                continue
+            try:
+                text = open(path, encoding="utf-8", errors="replace").read()
+            except OSError:
+                continue
+            if any(t in text for t in tokens) or section.search(text):
+                hits.append(rel)
+    eq("no private citations in shipped files", sorted(hits), [])
+
+
+def test_paid_solves_are_capped_per_page_across_rotations():
+    """One page that stays walled used to buy one solve PER EXIT: 2 with the
+    default --proxy-block-retries 1, 4 with 3. The allowance is per page,
+    checked before each purchase, and a rotation does not reset it."""
+    import browser_bridge
+    import page_flow
+    import captcha_solver
+    real = captcha_solver.solve_geetest_v4
+    calls = []
+
+    def fake_solve(key, cid, url, proxy=None, **kw):
+        calls.append(proxy)
+        return {"captcha_id": cid, "lot_number": "l", "pass_token": "p", "gen_time": "1",
+                "captcha_output": "o", "_cost": "0.00299"}
+    captcha_solver.solve_geetest_v4 = fake_solve
+    try:
+        d = FakeDriver([fixture("wall_captcha.html")] * 10)
+        args = _args(proxy=GATEWAY_PROXY.replace("region-RU", "region-RU-session-abcdefghi"),
+                     proxy_block_retries=3, twocaptcha_key="k")
+        args.solver_proxy = args.proxy
+        with tempfile.TemporaryDirectory() as tmp:
+            args.out = os.path.join(tmp, "o")
+            rc = _quiet(browser_bridge.run, args, d)
+            facts = json.load(open(os.path.join(tmp, "o.latest_attempt.meta.json")))[
+                "transport_facts"]
+    finally:
+        captcha_solver.solve_geetest_v4 = real
+    eq("a walled page exits 3", rc, 3)
+    check("the run did rotate exits", facts["rotations"] >= 1, "(%s)" % facts["rotations"])
+    eq("one paid solve for one page, whatever the rotations", len(calls),
+       page_flow.SOLVES_PER_PAGE)
+    check("the refused purchases are counted", facts.get("solves_refused_by_budget", 0) >= 1)
+    f = {}
+    check("another page has its own allowance",
+          browser_bridge._spend_solve(f, LISTING) and browser_bridge._spend_solve(f, LISTING + "?p=2"))
+    check("and the same page does not get a second one", not browser_bridge._spend_solve(f, LISTING))
+
+
+def test_canary_cannot_go_green_without_scraping():
+    """The canary took a green SKIP branch every day for a week: a badge that
+    said nothing about the site. Missing credentials and a non-zero live run
+    must both fail the job, and the data check must not lean on a
+    merchandising share."""
+    path = os.path.join(HERE, ".github", "workflows", "canary.yml")
+    if not os.path.isdir(os.path.join(HERE, ".github")):
+        skip("canary shape (.github absent)")
+        return
+    body = open(path, encoding="utf-8").read()
+    for name in ("TWOCAPTCHA_KEY", "AVITO_PROXY", "AVITO_BROWSER_ACCOUNT_ID"):
+        check("a missing %s fails the canary by name" % name,
+              re.search(r"::error::[^\n]*" + name, body) is not None)
+    check("no live step is skipped on missing credentials",
+          "env.READY" not in body and "SKIPPED" not in body)
+    check("a non-zero live run fails the canary",
+          'if [ "$rc" != "0" ]' in body and "exit 1" in body)
+    checks = open(os.path.join(HERE, ".github", "ci_checks.py"), encoding="utf-8").read()
+    check("the run check requires sku/url/title on every row",
+          '("sku", "url", "title")' in checks)
+    check("and no longer a seller-name share", "rows name a seller" not in checks)
 
 
 def main():

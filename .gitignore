@@ -26,6 +26,9 @@ canary*.meta.json
 *_debug.png
 *.html.page*
 *_p[0-9]*.html
+# --dump-html with any extension writes <root>_p<N><ext>
+*_p[0-9]*.txt
+*_p[0-9]*.htm
 
 # --- raw research captures ---------------------------------------------------
 recon/

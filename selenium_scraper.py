@@ -9,7 +9,8 @@ Two facts decide how it reaches avito.ru:
 
 * **Selenium cannot use an authenticated remote CDP endpoint.** chromedriver's
   `debuggerAddress` takes a bare host:port with nowhere to put the Scraping
-  Browser's password, so `--cdp-endpoint` is refused here, not ignored.
+  Browser's password, so a typed `--cdp-endpoint` is refused as a usage error (exit
+  2); one that only comes from `.env` is ignored with a notice.
 * **It CAN use an authenticated proxy — through a loopback forwarder.**
   Chrome's `--proxy-server` flag carries no credential; sibling repos
   stripped it and warned. On avito.ru that would make Selenium useless: the
@@ -120,7 +121,7 @@ class SeleniumDriver:
 def main(argv=None) -> int:
     parser = browser_bridge.build_parser(
         "Scrape avito.ru listings, items and seller profiles with Selenium.")
-    args = browser_bridge.parse_args(parser, argv)
+    args = browser_bridge.parse_args(parser, argv, cdp_supported=False)
     return browser_bridge.run(args, SeleniumDriver(args))
 
 

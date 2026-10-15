@@ -6,6 +6,72 @@ follow SemVer as closely as a CLI toolkit can: a **patch** means fixes, and a
 fix may change a default when the old one was wrong — such a change leads its
 entry in a blockquote.
 
+## [Unreleased]
+
+> **Exit codes and file modes changed.** A run that ends with zero rows for
+> any reason other than a listing read to its end now exits **5** (content
+> never obtained) instead of **4** — an item page with no item on it, a
+> seller profile that never parsed, a failed page. A wrong host, a
+> robots-disallowed URL, the wrong `--mode`, two URLs outside item mode and
+> an unreadable `--from` file now exit **2** instead of **1**. Output files
+> were created `0600`; they now follow the umask, and an existing file keeps
+> its mode. Selenium with a typed `--cdp-endpoint` now exits **2** instead of
+> **5**. **At most one paid captcha solve per page per run:** a page that
+> stays walled used to buy one solve per exit (2 with the default
+> `--proxy-block-retries 1`, 4 with 3); rotating to a fresh exit still
+> re-fetches the page, but no longer buys a second token for it.
+
+### Fixed
+
+* **Zero rows read as an empty catalogue.** `finish_run` returned 4 for
+  every zero-row run that was not blocked, so a removed item or a page that
+  failed looked like "nothing listed". Only the stop reasons that mean the
+  listing was read to its end keep 4; any other one, including one added
+  later, is 5.
+* **Usage errors exited 1**, which the exit table calls a crash, and a
+  missing `--from` file ended in a traceback. They are now argparse errors
+  (exit 2), checked before any browser starts.
+* **Outputs were owner-only.** The atomic writer's temp file is created
+  `0600` and the rename kept it. New files now get `0o666 & ~umask`; an
+  existing file keeps its own mode. Applies to the rows, the sidecar and the
+  attempt sidecar.
+* **Selenium and the Scraping Browser.** An endpoint from `.env` (shared by
+  all three engines) made every Selenium run exit 5 "transport_error". It is
+  now ignored with a notice; a typed `--cdp-endpoint` is a usage error.
+* **The secret scan read tracked files only.** `tools/scan_secrets.py
+  --worktree` (and `ci_checks.py --secret-check`) now also reads untracked
+  files that are not ignored, skips any directory holding `pyvenv.cfg`, prints
+  how many files it read, and fails when it read none instead of reporting
+  "clean".
+* **Paid solves are capped per page.** The allowance
+  (`page_flow.SOLVES_PER_PAGE = 1`) is checked before each purchase, keyed by
+  the page's URL, and not reset by a retry or by rotating to a fresh exit. A
+  refused purchase is logged and counted as `solves_refused_by_budget` in
+  `transport_facts`. The Scraping Browser's own auto-solve is not counted.
+* **pyppeteer's Scraping Browser connect is bounded** (30 s); a rejected
+  handshake could leave it waiting forever.
+
+### Added
+
+* **CSV formula guard.** Text cells starting with `=`, `+`, `-`, `@`, tab, CR
+  or LF get a leading `'` in the CSV only (after lists and dicts are joined);
+  numbers are untouched and the JSON keeps the site's text. The sidecar
+  records `csv_cells_escaped`.
+
+### Changed
+
+* **The canary no longer goes green without scraping.** Without
+  `TWOCAPTCHA_KEY`, `AVITO_PROXY` or `AVITO_BROWSER_ACCOUNT_ID` it fails,
+  naming the missing one, instead of taking a green skip branch; a live run
+  that does not exit 0 is red. Its data check no longer requires half the rows
+  to name a seller (the private/company mix is the category's, not the
+  parser's) and instead requires `sku`, `url` and `title` on every row.
+* `requirements-playwright.txt` asks for `playwright>=1.44`, as the
+  `[playwright]` extra already did.
+* `.gitignore` covers `--dump-html` names with a `.txt` or `.htm` extension.
+* Comments and docstrings no longer point at internal documents or at other
+  repositories; each states its reason here.
+
 ## [1.0.2] — 2026-10-10
 
 Fixes from a review of v1.0.1, each reproduced against v1.0.1 before it

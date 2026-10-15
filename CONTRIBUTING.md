@@ -71,7 +71,8 @@ wrong:
 - **The wall is recognised by its `<form>`**, not by the class name, which the
   wall's own script also mentions.
 - **Exit codes are a contract**: `0` ok, `1` crash, `2` bad usage, `3`
-  blocked, `4` zero rows, `5` transport error, `6` partial. A transport fault
+  blocked, `4` zero rows from a listing read to its end, `5` content never obtained
+  (transport, or zero rows for any other reason), `6` partial. A transport fault
   is never `3`.
 - **A run that finds nothing writes nothing.** `--allow-empty` is the opt-out.
 - **No phone, no IMEI, no private seller's placeholder name** in any row.

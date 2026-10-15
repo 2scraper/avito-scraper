@@ -17,7 +17,7 @@ So the only guard that actually protects anything is one that runs on YOUR
 machine, before the commit object exists.
 
     python3 tools/scan_secrets.py --staged     # what is about to be committed
-    python3 tools/scan_secrets.py --worktree   # every tracked file
+    python3 tools/scan_secrets.py --worktree   # tracked + untracked, not ignored
     python3 tools/scan_secrets.py --range A..B # commits about to be pushed
     python3 tools/scan_secrets.py --history    # every blob that ever existed
 
@@ -141,8 +141,53 @@ def scan_staged() -> int:
     return _report(findings)
 
 
+def _in_virtualenv(name: str, cache: dict) -> bool:
+    """True when any parent directory of `name` holds pyvenv.cfg.
+
+    A virtualenv is recognised by the file that defines one, not by its name:
+    a venv called anything but `venv`/`.venv` is full of vendored hex, and
+    walking into it makes the scan fail on pip's code.
+    """
+    import os
+    parts = name.split("/")[:-1]
+    for i in range(1, len(parts) + 1):
+        directory = "/".join(parts[:i])
+        if directory not in cache:
+            cache[directory] = os.path.isfile(os.path.join(directory, "pyvenv.cfg"))
+        if cache[directory]:
+            return True
+    return False
+
+
+def worktree_names():
+    """Tracked files AND untracked files that are not ignored.
+
+    Tracked-only missed exactly the file this scanner exists for: an
+    untracked `.env.bak` or a scratch script with a key in it, one
+    `git add -A` away from a commit. Ignored files are left out: `.env`
+    itself lives there by design and cannot be committed without `-f`.
+    """
+    tracked = [n for n in _git("ls-files", "-z").split("\0") if n]
+    untracked = [n for n in _git("ls-files", "-z", "--others",
+                                 "--exclude-standard").split("\0") if n]
+    cache: dict = {}
+    untracked = [n for n in untracked if not _in_virtualenv(n, cache)]
+    return tracked + untracked
+
+
 def scan_worktree() -> int:
-    names = [n for n in _git("ls-files", "-z").split("\0") if n]
+    import os
+    top = _git("rev-parse", "--show-toplevel").strip()
+    if top:
+        os.chdir(top)  # names are repo-relative, as SKIP expects
+    names = worktree_names()
+    if not names:
+        # No git, or not run from the repository: "clean" would be a claim
+        # about files nobody read.
+        print("secret scan: 0 files scanned — run it from inside the git "
+              "checkout", file=sys.stderr)
+        return 1
+    print("secret scan: %d file(s) in the working tree" % len(names))
     findings = []
     for name in names:
         try:

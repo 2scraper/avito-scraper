@@ -103,7 +103,8 @@ def sample_check(prefix="sample_output"):
 
 
 def secret_check():
-    """Delegate to tools/scan_secrets.py — ONE scanner, not two (§21)."""
+    """Delegate to tools/scan_secrets.py — ONE scanner, not two, so CI and
+    the git hooks cannot disagree about what is a secret."""
     result = subprocess.run(
         [sys.executable, str(REPO / "tools" / "scan_secrets.py"), "--worktree"],
         capture_output=True, text=True, cwd=REPO)
@@ -155,15 +156,19 @@ def run_check(prefix="sample_output"):
     # each fail quietly in their own way on this site:
     #   price        — the grid painted before its prices did
     #   region_slug  — every item URL states it; empty means the URL was lost
-    #   seller_name  — 49 of 50 cards named a seller when measured
+    #   sku/url/title — the row's identity; a card read without them is a
+    #                   parser fault, whatever the category is selling
     priced = sum(1 for r in rows if r.get("price") is not None)
     if priced < 0.9 * len(rows):
         failed.append(f"only {priced}/{len(rows)} rows carry a price")
     if not all(r.get("region_slug") for r in rows):
         failed.append("a row has no region_slug")
-    named = sum(1 for r in rows if r.get("seller_name"))
-    if named < 0.5 * len(rows):
-        failed.append(f"only {named}/{len(rows)} rows name a seller")
+    # Not a seller-name share: how many private vs. company sellers a category
+    # shows is merchandising, not the parser.
+    for column in ("sku", "url", "title"):
+        empty = sum(1 for r in rows if not r.get(column))
+        if empty:
+            failed.append(f"{empty}/{len(rows)} rows have no {column}")
     inverted = [r for r in rows if r.get("original_price") is not None
                 and r.get("price") is not None and r["original_price"] <= r["price"]]
     if inverted:
