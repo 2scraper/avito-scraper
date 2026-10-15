@@ -202,6 +202,11 @@ def solve_wall(driver, args, url: str, html: str, facts: Dict[str, Any], log=Non
         print("[!] firewall captcha (%s) and no TWOCAPTCHA_KEY — continuing without "
               "solving." % variant, file=sys.stderr)
         return None
+    if not _spend_solve(facts, url):
+        print("[!] firewall captcha (%s) on %s: the paid-solve allowance for this "
+              "page (%d) is spent — not buying another."
+              % (variant, url, page_flow.SOLVES_PER_PAGE), file=sys.stderr)
+        return None
     import captcha_solver
     t0 = time.monotonic()
     try:
@@ -242,6 +247,21 @@ def solve_wall(driver, args, url: str, html: str, facts: Dict[str, Any], log=Non
     if not submitted:
         print("[!] the wall's form was gone before the solution arrived.", file=sys.stderr)
     return _after_submit(driver, url, record, facts)
+
+
+def _spend_solve(facts: Dict[str, Any], url: str) -> bool:
+    """Take one paid solve from this page's allowance; False when none is left.
+
+    Called before the purchase, so a refusal costs nothing. Keyed by URL and
+    kept in the run's facts, so a retry or a rotation to a fresh exit (which
+    re-fetches the same URL) draws on the same allowance.
+    """
+    spent = facts.setdefault("paid_solves_by_page", {})
+    if spent.get(url, 0) >= page_flow.SOLVES_PER_PAGE:
+        facts["solves_refused_by_budget"] = facts.get("solves_refused_by_budget", 0) + 1
+        return False
+    spent[url] = spent.get(url, 0) + 1
+    return True
 
 
 def _after_submit(driver, url: str, record: Dict[str, Any], facts: Dict[str, Any]) -> Optional[str]:

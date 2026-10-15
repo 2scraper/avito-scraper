@@ -16,7 +16,10 @@ entry in a blockquote.
 > an unreadable `--from` file now exit **2** instead of **1**. Output files
 > were created `0600`; they now follow the umask, and an existing file keeps
 > its mode. Selenium with a typed `--cdp-endpoint` now exits **2** instead of
-> **5**.
+> **5**. **At most one paid captcha solve per page per run:** a page that
+> stays walled used to buy one solve per exit (2 with the default
+> `--proxy-block-retries 1`, 4 with 3); rotating to a fresh exit still
+> re-fetches the page, but no longer buys a second token for it.
 
 ### Fixed
 
@@ -40,6 +43,11 @@ entry in a blockquote.
   files that are not ignored, skips any directory holding `pyvenv.cfg`, prints
   how many files it read, and fails when it read none instead of reporting
   "clean".
+* **Paid solves are capped per page.** The allowance
+  (`page_flow.SOLVES_PER_PAGE = 1`) is checked before each purchase, keyed by
+  the page's URL, and not reset by a retry or by rotating to a fresh exit. A
+  refused purchase is logged and counted as `solves_refused_by_budget` in
+  `transport_facts`. The Scraping Browser's own auto-solve is not counted.
 * **pyppeteer's Scraping Browser connect is bounded** (30 s); a rejected
   handshake could leave it waiting forever.
 

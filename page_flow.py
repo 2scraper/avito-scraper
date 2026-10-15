@@ -53,6 +53,13 @@ CHALLENGE_POLL_MS = 1000
 # failures and a success that would arrive in the same window.
 AUTOSOLVE_BUDGET_MS = 25000
 
+# Paid 2Captcha solves allowed for ONE page (one URL) per run. Checked BEFORE
+# each purchase in browser_bridge.solve_wall, the only place a solve is
+# bought, and never reset by a navigation retry or by rotating to a fresh
+# exit: a fresh exit is a reason to re-fetch, not a fresh allowance. The
+# browser's own auto-solve over the Scraping Browser is not counted.
+SOLVES_PER_PAGE = 1
+
 # Readiness anchors per mode — what "the page has painted" means.
 # A listing is ready when MORE than one card is present: one match can
 # resolve on an unrelated card-shaped node long before the grid paints

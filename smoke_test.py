@@ -1908,6 +1908,44 @@ def test_no_private_citations_in_shipped_files():
     eq("no private citations in shipped files", sorted(hits), [])
 
 
+def test_paid_solves_are_capped_per_page_across_rotations():
+    """One page that stays walled used to buy one solve PER EXIT: 2 with the
+    default --proxy-block-retries 1, 4 with 3. The allowance is per page,
+    checked before each purchase, and a rotation does not reset it."""
+    import browser_bridge
+    import page_flow
+    import captcha_solver
+    real = captcha_solver.solve_geetest_v4
+    calls = []
+
+    def fake_solve(key, cid, url, proxy=None, **kw):
+        calls.append(proxy)
+        return {"captcha_id": cid, "lot_number": "l", "pass_token": "p", "gen_time": "1",
+                "captcha_output": "o", "_cost": "0.00299"}
+    captcha_solver.solve_geetest_v4 = fake_solve
+    try:
+        d = FakeDriver([fixture("wall_captcha.html")] * 10)
+        args = _args(proxy=GATEWAY_PROXY.replace("region-RU", "region-RU-session-abcdefghi"),
+                     proxy_block_retries=3, twocaptcha_key="k")
+        args.solver_proxy = args.proxy
+        with tempfile.TemporaryDirectory() as tmp:
+            args.out = os.path.join(tmp, "o")
+            rc = _quiet(browser_bridge.run, args, d)
+            facts = json.load(open(os.path.join(tmp, "o.latest_attempt.meta.json")))[
+                "transport_facts"]
+    finally:
+        captcha_solver.solve_geetest_v4 = real
+    eq("a walled page exits 3", rc, 3)
+    check("the run did rotate exits", facts["rotations"] >= 1, "(%s)" % facts["rotations"])
+    eq("one paid solve for one page, whatever the rotations", len(calls),
+       page_flow.SOLVES_PER_PAGE)
+    check("the refused purchases are counted", facts.get("solves_refused_by_budget", 0) >= 1)
+    f = {}
+    check("another page has its own allowance",
+          browser_bridge._spend_solve(f, LISTING) and browser_bridge._spend_solve(f, LISTING + "?p=2"))
+    check("and the same page does not get a second one", not browser_bridge._spend_solve(f, LISTING))
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for test in tests:

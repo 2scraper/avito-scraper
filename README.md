@@ -283,6 +283,10 @@ pyppeteer is effectively unmaintained; it is here for parity.
 | `5` | Content never obtained — **our** plumbing (a navigation timeout, a dead exit, `profile_locked`, `proxy_error`), or zero rows for any reason other than a listing read to its end: a failed page, an item page with no item on it, a seller profile that never parsed |
 | `6` | Partial — some pages fetched, then stopped |
 
+A page buys at most one paid captcha solve per run
+(`page_flow.SOLVES_PER_PAGE`): a fresh exit re-fetches a page that stayed
+walled, but does not buy a second token for it.
+
 `3` and `5` mean different things: `5` says the content was never obtained,
 so the answer is "run it again", "rebuild the endpoint" or "check the URL",
 not the firewall. `4` is only for a run that read the listing to its end.
