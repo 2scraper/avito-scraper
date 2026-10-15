@@ -8,6 +8,8 @@ entry in a blockquote.
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-10-15
+
 > **Exit codes and file modes changed.** A run that ends with zero rows for
 > any reason other than a listing read to its end now exits **5** (content
 > never obtained) instead of **4** — an item page with no item on it, a
