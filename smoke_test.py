@@ -1946,6 +1946,29 @@ def test_paid_solves_are_capped_per_page_across_rotations():
     check("and the same page does not get a second one", not browser_bridge._spend_solve(f, LISTING))
 
 
+def test_canary_cannot_go_green_without_scraping():
+    """The canary took a green SKIP branch every day for a week: a badge that
+    said nothing about the site. Missing credentials and a non-zero live run
+    must both fail the job, and the data check must not lean on a
+    merchandising share."""
+    path = os.path.join(HERE, ".github", "workflows", "canary.yml")
+    if not os.path.isdir(os.path.join(HERE, ".github")):
+        skip("canary shape (.github absent)")
+        return
+    body = open(path, encoding="utf-8").read()
+    for name in ("TWOCAPTCHA_KEY", "AVITO_PROXY", "AVITO_BROWSER_ACCOUNT_ID"):
+        check("a missing %s fails the canary by name" % name,
+              re.search(r"::error::[^\n]*" + name, body) is not None)
+    check("no live step is skipped on missing credentials",
+          "env.READY" not in body and "SKIPPED" not in body)
+    check("a non-zero live run fails the canary",
+          'if [ "$rc" != "0" ]' in body and "exit 1" in body)
+    checks = open(os.path.join(HERE, ".github", "ci_checks.py"), encoding="utf-8").read()
+    check("the run check requires sku/url/title on every row",
+          '("sku", "url", "title")' in checks)
+    check("and no longer a seller-name share", "rows name a seller" not in checks)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for test in tests:

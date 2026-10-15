@@ -18,9 +18,11 @@ name: canary
 # different exit is rejected (measured).
 #
 # Needs: secrets TWOCAPTCHA_KEY and AVITO_PROXY (the base gateway login), and
-# repository variables AVITO_BROWSER_ACCOUNT_ID / AVITO_BROWSER_PROFILE_ID.
-# Without them the job goes GREEN with a ::notice:: — a check that is always
-# red teaches everyone to ignore checks.
+# repository variable AVITO_BROWSER_ACCOUNT_ID (AVITO_BROWSER_PROFILE_ID is
+# optional). Without them the job FAILS, naming what is missing: a green
+# canary must mean avito.ru was scraped, and a skip that reads green said
+# nothing about the site for weeks. A blocked run (exit 3), a run that never
+# reached the site (5) or zero rows is red too.
 on:
   schedule:
     - cron: "23 5 * * *"
@@ -33,30 +35,31 @@ jobs:
     env:
       # `secrets` is not available in a job-level `if`; presence goes through
       # job env and is read in each step's `if`.
-      READY: ${{ secrets.TWOCAPTCHA_KEY != '' && secrets.AVITO_PROXY != '' && vars.AVITO_BROWSER_ACCOUNT_ID != '' }}
+      HAS_TWOCAPTCHA_KEY: ${{ secrets.TWOCAPTCHA_KEY != '' }}
+      HAS_AVITO_PROXY: ${{ secrets.AVITO_PROXY != '' }}
+      HAS_ACCOUNT_ID: ${{ vars.AVITO_BROWSER_ACCOUNT_ID != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Explain the skip
-        if: env.READY != 'true'
+      - name: Require the live-run credentials
+        # A GitHub runner is not a Russian residential address, so there is no
+        # live path without these. Missing ones fail the job by name.
         run: |
-          echo "::warning::LIVE RUN SKIPPED — this green run proves the workflow is healthy, NOT that avito.ru was scraped."
-          echo "::notice::Needs secrets TWOCAPTCHA_KEY and AVITO_PROXY and the"
-          echo "::notice::variable AVITO_BROWSER_ACCOUNT_ID. A GitHub runner is not a"
-          echo "::notice::Russian residential address; a live run from here without the"
-          echo "::notice::Scraping Browser would be red every day regardless of the code."
+          missing=0
+          [ "$HAS_TWOCAPTCHA_KEY" = "true" ] || { echo "::error::secret TWOCAPTCHA_KEY is not set — the canary cannot reach avito.ru"; missing=1; }
+          [ "$HAS_AVITO_PROXY" = "true" ] || { echo "::error::secret AVITO_PROXY (the base Russian gateway login) is not set"; missing=1; }
+          [ "$HAS_ACCOUNT_ID" = "true" ] || { echo "::error::repository variable AVITO_BROWSER_ACCOUNT_ID is not set"; missing=1; }
+          exit $missing
 
       - name: Install
-        if: env.READY == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-playwright.txt
 
       - name: Build a fresh endpoint and its matching solver proxy
-        if: env.READY == 'true'
         # Credentials through the ENVIRONMENT, never argv. The tool writes
         # AVITO_CDP_ENDPOINT and the minted AVITO_PROXY into a 0600 .env and
         # prints both masked.
@@ -71,7 +74,6 @@ jobs:
             --mint-session --session-minutes 60 --write-env
 
       - name: Live run
-        if: env.READY == 'true'
         # AVITO_PROXY is deliberately NOT exported here: an exported variable
         # outranks .env, and the base login would replace the minted session
         # the endpoint was built with.
@@ -87,10 +89,13 @@ jobs:
           set -e
 
       - name: Assert the data, not just the exit code
-        if: env.READY == 'true'
         # THE SHIPPED CHECK, not an inline copy (a 2scraper family rule).
         run: |
           echo "exit code from the run: $rc"
+          if [ "$rc" != "0" ]; then
+            echo "::error::the live run exited $rc (3 blocked, 4 no rows, 5 content never obtained, 6 partial) — the canary did not get a complete scrape"
+            exit 1
+          fi
           python3 .github/ci_checks.py --run-check --sample-check --output-prefix canary
 
       - name: Remove the minted credentials

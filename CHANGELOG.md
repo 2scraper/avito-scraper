@@ -60,6 +60,12 @@ entry in a blockquote.
 
 ### Changed
 
+* **The canary no longer goes green without scraping.** Without
+  `TWOCAPTCHA_KEY`, `AVITO_PROXY` or `AVITO_BROWSER_ACCOUNT_ID` it fails,
+  naming the missing one, instead of taking a green skip branch; a live run
+  that does not exit 0 is red. Its data check no longer requires half the rows
+  to name a seller (the private/company mix is the category's, not the
+  parser's) and instead requires `sku`, `url` and `title` on every row.
 * `requirements-playwright.txt` asks for `playwright>=1.44`, as the
   `[playwright]` extra already did.
 * `.gitignore` covers `--dump-html` names with a `.txt` or `.htm` extension.

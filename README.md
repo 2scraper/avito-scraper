@@ -18,12 +18,14 @@ actually needs.
 [![engines](https://img.shields.io/badge/engines-Playwright%20%7C%20Selenium%20%7C%20pyppeteer%20%7C%20CDP-informational)](#engines)
 [![needs a Russian exit](https://img.shields.io/badge/needs-a%20Russian%20exit%20%2B%20a%20browser-orange)](#the-one-thing-you-actually-need)
 
-> **What the canary badge means.** The daily canary scrapes avito.ru only when
-> the repository holds the secrets for a Russian exit and a captcha key. This
-> public repository does not, so the canary takes its documented SKIP branch:
-> a green badge here says the workflow is healthy, **not** that avito.ru was
-> scraped today. Each skipped run says so in a warning. The live measurements
-> are in [Measured results](#measured-results), with their dates.
+> **What the canary badge means.** The daily canary scrapes three pages of
+> avito.ru through the Scraping Browser API on a Russian exit and is green only
+> when that run is complete and its rows pass the data checks. It needs the
+> secrets `TWOCAPTCHA_KEY` and `AVITO_PROXY` and the variable
+> `AVITO_BROWSER_ACCOUNT_ID`; without them it is **red**, naming what is
+> missing, rather than green without having scraped anything. A blocked run,
+> one that never reached the site, or zero rows is red too. The live
+> measurements are in [Measured results](#measured-results), with their dates.
 
 ---
 
