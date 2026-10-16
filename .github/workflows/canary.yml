@@ -25,7 +25,7 @@ name: canary
 # reached the site (5) or zero rows is red too.
 on:
   schedule:
-    - cron: "23 5 * * *"
+    - cron: "23 5 * * 1"   # weekly, Mondays
   workflow_dispatch:
 
 jobs:
