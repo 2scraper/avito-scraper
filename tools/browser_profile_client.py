@@ -161,11 +161,19 @@ def _call(method: str, path: str, key: str, *, params=None, body=None):
     url = f"{BASE}{path}"
     try:
         r = requests.request(method, url, params=params, json=body, timeout=TIMEOUT)
-        r.raise_for_status()
     except requests.RequestException as e:
         # The key rides in the query string on GET, and `requests` puts the
         # whole URL into this message. Redact before it reaches a log.
         sys.exit(f"!! {method} {path} failed: {redact(e, key)}")
+    if not r.ok:
+        # The API names the cause in the body (ERROR_ACCOUNT_NOT_FOUND,
+        # ERROR_CUSTOM_PROXY_AUTH, ...); a bare "404 Not Found" hid it.
+        try:
+            detail = json.dumps(safe(r.json()))
+        except ValueError:
+            detail = "(non-JSON body, %d bytes)" % len(r.content)
+        sys.exit(f"!! {method} {path} failed: HTTP {r.status_code}: "
+                 f"{redact(detail, key)}")
     try:
         data = r.json()
     except ValueError:
