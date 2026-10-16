@@ -38,6 +38,9 @@ jobs:
       HAS_TWOCAPTCHA_KEY: ${{ secrets.TWOCAPTCHA_KEY != '' }}
       HAS_AVITO_PROXY: ${{ secrets.AVITO_PROXY != '' }}
       HAS_ACCOUNT_ID: ${{ vars.AVITO_BROWSER_ACCOUNT_ID != '' }}
+      # A ready endpoint from the owner (secret AVITO_CDP_ENDPOINT) is used as
+      # is; only without one does the job build its own from the account.
+      HAS_CDP: ${{ secrets.AVITO_CDP_ENDPOINT != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,7 +54,7 @@ jobs:
           missing=0
           [ "$HAS_TWOCAPTCHA_KEY" = "true" ] || { echo "::error::secret TWOCAPTCHA_KEY is not set — the canary cannot reach avito.ru"; missing=1; }
           [ "$HAS_AVITO_PROXY" = "true" ] || { echo "::error::secret AVITO_PROXY (the base Russian gateway login) is not set"; missing=1; }
-          [ "$HAS_ACCOUNT_ID" = "true" ] || { echo "::error::repository variable AVITO_BROWSER_ACCOUNT_ID is not set"; missing=1; }
+          [ "$HAS_CDP" = "true" ] || [ "$HAS_ACCOUNT_ID" = "true" ] || { echo "::error::neither secret AVITO_CDP_ENDPOINT nor repository variable AVITO_BROWSER_ACCOUNT_ID is set"; missing=1; }
           exit $missing
 
       - name: Install
@@ -59,7 +62,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-playwright.txt
 
+      - name: Use the given endpoint
+        if: env.HAS_CDP == 'true'
+        # Written to a 0600 .env from the environment; never echoed. The
+        # solver gets AVITO_PROXY as stored: it must be the same exit as the
+        # endpoint's, or a solved captcha is rejected.
+        env:
+          AVITO_CDP_ENDPOINT: ${{ secrets.AVITO_CDP_ENDPOINT }}
+          AVITO_PROXY: ${{ secrets.AVITO_PROXY }}
+        run: |
+          install -m 600 /dev/null .env
+          python3 - <<'PY2'
+          import os
+          with open(".env", "w", encoding="utf-8") as f:
+              f.write("AVITO_CDP_ENDPOINT=" + os.environ["AVITO_CDP_ENDPOINT"].strip() + "\n")
+              f.write("AVITO_PROXY=" + os.environ["AVITO_PROXY"].strip() + "\n")
+          PY2
+          echo "using the endpoint from secret AVITO_CDP_ENDPOINT"
+
       - name: Build a fresh endpoint and its matching solver proxy
+        if: env.HAS_CDP != 'true'
         # Credentials through the ENVIRONMENT, never argv. The tool writes
         # AVITO_CDP_ENDPOINT and the minted AVITO_PROXY into a 0600 .env and
         # prints both masked.
