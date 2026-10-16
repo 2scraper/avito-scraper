@@ -8,6 +8,8 @@ entry in a blockquote.
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-10-16
+
 > **`AVITO_PROXY` / `--proxy` accept the dashboard's colon form.**
 > `host:port:login:password` (with or without `http://`) is now read as
 > `http://login:password@host:port` instead of being refused or misread. A
