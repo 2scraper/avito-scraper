@@ -30,7 +30,7 @@ import random
 import re
 import string
 from typing import List, Optional
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote, unquote, urlparse, urlunparse
 
 logger = logging.getLogger("proxy_pool")
 
@@ -52,6 +52,38 @@ class ProxyError(ValueError):
     """A proxy list that cannot be used as given."""
 
 
+# The 2Captcha dashboard hands a proxy out as `host:port:login:password`
+# (sometimes with an `http://` in front), not as a URL. Read as a URL that
+# string has no username at all and a "port" of `port:login:password` --
+# so a gateway credential looked like an IP-whitelisted one, and the
+# ValueError urlparse raises on that port quotes the login. Both forms are
+# accepted; the colon form is rewritten to scheme://login:password@host:port
+# with login and password percent-encoded, and every consumer decodes them.
+_COLON_FORM_RE = re.compile(
+    r"^(?:(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*)://)?"
+    r"(?P<host>[^:@/\s]+):(?P<port>\d{1,5}):"
+    r"(?P<login>[^:@/\s]+):(?P<password>\S+)$")
+
+
+def normalize_proxy(value: Optional[str]) -> Optional[str]:
+    """`value` as a proxy URL: the colon form rewritten, anything else as is."""
+    if value is None:
+        return None
+    text = value.strip()
+    m = _COLON_FORM_RE.match(text)
+    if not m:
+        return text
+    scheme = (m.group("scheme") or "http").lower()
+    login = quote(m.group("login"), safe="-_.~")
+    password = quote(m.group("password"), safe="-_.~")
+    return f"{scheme}://{login}:{password}@{m.group('host')}:{m.group('port')}"
+
+
+def credentials_of(parsed) -> tuple:
+    """(login, password) of a parsed proxy URL, percent-decoded ("" if absent)."""
+    return unquote(parsed.username or ""), unquote(parsed.password or "")
+
+
 def parse_proxy_line(line: str, source: str = "<arg>") -> Optional[str]:
     """Validate one proxy URL. Returns it, or None for a blank/comment line.
 
@@ -62,6 +94,7 @@ def parse_proxy_line(line: str, source: str = "<arg>") -> Optional[str]:
     line = line.strip()
     if not line or line.startswith("#"):
         return None
+    line = normalize_proxy(line)
 
     # Every message below reports mask(line), never the line itself. These
     # strings hold a password, and an error message is a log: a CI run
@@ -91,10 +124,9 @@ def parse_proxy_line(line: str, source: str = "<arg>") -> Optional[str]:
         parsed.port
     except ValueError:
         raise ProxyError(
-            f"{source}: {shown!r} — the port is not a number. If you copied "
-            f"this from a proxy list file, that format is "
-            f"scheme://host:port:login:password and this expects a URL: "
-            f"http://login:password@host:port") from None
+            f"{source}: {shown!r} — the port is not a number. Write the "
+            f"proxy as http://login:password@host:port or as "
+            f"host:port:login:password.") from None
     if parsed.scheme == "socks5" and (parsed.username or parsed.password):
         raise ProxyError(
             f"{source}: {shown!r} — Chromium cannot authenticate a SOCKS5 "
@@ -135,7 +167,7 @@ def mask(url: Optional[str]) -> str:
     if not url:
         return "(none)"
     try:
-        parsed = urlparse(url)
+        parsed = urlparse(normalize_proxy(url))
         host = parsed.hostname or "?"
         # `parsed.port` raises on a malformed authority; the raw netloc is
         # not safe to fall back to, because that is where the password is.
@@ -179,10 +211,11 @@ def to_playwright(url: Optional[str]) -> Optional[dict]:
     parsed = urlparse(url)
     port = f":{parsed.port}" if parsed.port else ""
     proxy = {"server": f"{parsed.scheme}://{parsed.hostname}{port}"}
-    if parsed.username:
-        proxy["username"] = parsed.username
-    if parsed.password:
-        proxy["password"] = parsed.password
+    login, password = credentials_of(parsed)
+    if login:
+        proxy["username"] = login
+    if password:
+        proxy["password"] = password
     return proxy
 
 
@@ -202,7 +235,7 @@ def split_credentials(url: Optional[str]):
     port = f":{parsed.port}" if parsed.port else ""
     scrubbed = f"{parsed.scheme}://{parsed.hostname}{port}"
     if parsed.username or parsed.password:
-        return scrubbed, (parsed.username or "", parsed.password or "")
+        return scrubbed, credentials_of(parsed)
     return scrubbed, None
 
 
@@ -320,7 +353,7 @@ def is_2captcha_gateway(url: Optional[str]) -> bool:
     if not url:
         return False
     try:
-        host = (urlparse(url).hostname or "").lower()
+        host = (urlparse(normalize_proxy(url)).hostname or "").lower()
     except ValueError:
         return False
     return host.endswith(_GATEWAY_SUFFIXES)
@@ -328,6 +361,45 @@ def is_2captcha_gateway(url: Optional[str]) -> bool:
 
 def _session_id(rng: random.Random) -> str:
     return "".join(rng.choice(_SESSION_CHARS) for _ in range(_SESSION_LEN))
+
+
+def require_gateway_login(url: str, name: str = "the proxy") -> str:
+    """`url` normalised, or ProxyError when it carries no login and password.
+
+    The session id lives INSIDE the login, so a host-only (IP-whitelisted)
+    gateway URL has nowhere to put one. Splicing a login into such a URL
+    used to produce a string with no host at all, refused with a message
+    that blamed the host. The credential is never part of the message.
+    """
+    url = normalize_proxy(url)
+    parts = urlparse(url)
+    if not (parts.username and parts.password):
+        raise ProxyError(
+            f"{name} has no login: session minting needs the gateway's "
+            f"LOGIN:PASSWORD form (http://LOGIN:PASSWORD@<host>{_GATEWAY_SUFFIX}:PORT "
+            f"or <host>{_GATEWAY_SUFFIX}:PORT:LOGIN:PASSWORD); an IP-whitelisted "
+            f"gateway URL cannot carry a -session-/-sessTime- id.")
+    return url
+
+
+def with_login(url: str, login: str) -> str:
+    """The same proxy URL with its login replaced, rebuilt from its parts.
+
+    Only the netloc's login changes. A str.replace on the whole URL put the
+    login in front of the scheme when the old login was empty.
+    """
+    parts = urlparse(normalize_proxy(url))
+    try:
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:
+        # The message from urlparse quotes the port text, which can hold
+        # the login and password -- never pass it on.
+        raise ProxyError(f"{mask(url)}: the port is not a number") from None
+    host = parts.hostname or ""
+    password = parts.password or ""
+    netloc = f"{login}:{password}@{host}{port}" if password else f"{login}@{host}{port}"
+    return urlunparse((parts.scheme, netloc, parts.path, parts.params,
+                       parts.query, parts.fragment))
 
 
 def with_session(url: str, session: str) -> str:
@@ -339,20 +411,15 @@ def with_session(url: str, session: str) -> str:
     nobody thought of, so this replaces the session in place, or appends one
     before `-sessTime-` when there is none.
     """
-    parts = urlparse(url)
-    login = parts.username or ""
+    url = require_gateway_login(url)
+    login = urlparse(url).username or ""
     if _SESSION_RE.search(login):
         new_login = _SESSION_RE.sub("-session-" + session, login, count=1)
     elif _SESSTIME_RE.search(login):
         new_login = _SESSTIME_RE.sub("-session-" + session + r"\g<0>", login, count=1)
     else:
         new_login = login + "-session-" + session
-    password = parts.password or ""
-    host = parts.hostname or ""
-    port = f":{parts.port}" if parts.port else ""
-    netloc = f"{new_login}:{password}@{host}{port}" if password else f"{new_login}@{host}{port}"
-    return urlunparse((parts.scheme, netloc, parts.path, parts.params,
-                       parts.query, parts.fragment))
+    return with_login(url, new_login)
 
 
 def mint_sessions(url: str, count: int, rng: Optional[random.Random] = None) -> List[str]:
@@ -369,6 +436,7 @@ def mint_sessions(url: str, count: int, rng: Optional[random.Random] = None) -> 
             "--proxy-sessions only applies to a 2Captcha proxy gateway "
             f"(a host under {_GATEWAY_SUFFIX}); the URL given is not one. "
             "Use --proxy-file for proxies from anywhere else.")
+    url = require_gateway_login(url)
     rng = rng or random.Random()
     seen, out = set(), []
     while len(out) < count:

@@ -54,7 +54,7 @@ import json
 import re
 import time
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import requests
 
@@ -103,10 +103,12 @@ def proxy_task_fields(proxy: Optional[str]) -> dict:
     if not (p.scheme and p.hostname and port):
         return {}
     fields = {"proxyType": p.scheme, "proxyAddress": p.hostname, "proxyPort": port}
+    # Percent-decoded: a password with `@` or `:` in it travels encoded in
+    # the URL, and the API wants the password itself.
     if p.username:
-        fields["proxyLogin"] = p.username
+        fields["proxyLogin"] = unquote(p.username)
     if p.password:
-        fields["proxyPassword"] = p.password
+        fields["proxyPassword"] = unquote(p.password)
     return fields
 
 

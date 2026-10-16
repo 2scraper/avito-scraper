@@ -1014,6 +1014,11 @@ def parse_args(parser, argv=None, *, cdp_supported: bool = True):
     except UsageError as exc:
         parser.error(str(exc))
 
+    if args.proxy:
+        # The dashboard's host:port:login:password form becomes a URL here,
+        # once, so every engine and the solver read the same value.
+        args.proxy = proxy_pool.normalize_proxy(args.proxy)
+
     if args.cdp_endpoint:
         # Never applied to the remote browser — it brings its own exit.
         args.solver_proxy = args.proxy
@@ -1033,7 +1038,10 @@ def parse_args(parser, argv=None, *, cdp_supported: bool = True):
                 and "-session-" not in args.proxy and not args.proxy_sessions:
             # A bare gateway login rotates per request; the solver must share
             # the browser's exit, so pin one session for the run.
-            args.proxy = proxy_pool.mint_sessions(args.proxy, 1)[0]
+            try:
+                args.proxy = proxy_pool.mint_sessions(args.proxy, 1)[0]
+            except proxy_pool.ProxyError as exc:
+                parser.error(str(exc))
         try:
             args.pool = proxy_pool.from_args(args)
         except proxy_pool.ProxyError as exc:

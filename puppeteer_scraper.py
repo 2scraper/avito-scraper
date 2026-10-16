@@ -21,6 +21,7 @@ import sys
 from urllib.parse import urlparse
 
 import browser_bridge
+import proxy_pool
 
 # Module level, so the offline suite can skip this engine when pyppeteer is
 # absent instead of importing cleanly and failing on first launch.
@@ -74,7 +75,8 @@ class PuppeteerDriver:
                 options["args"].append("--proxy-server=%s://%s:%s"
                                        % (parts.scheme or "http", parts.hostname, parts.port))
                 if parts.username:
-                    credentials = {"username": parts.username, "password": parts.password or ""}
+                    login, password = proxy_pool.credentials_of(parts)
+                    credentials = {"username": login, "password": password}
             self._browser = self._run(launch(**options))
             self._page = self._run(self._browser.newPage())
             if credentials:

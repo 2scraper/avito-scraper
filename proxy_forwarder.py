@@ -36,7 +36,7 @@ import select
 import socket
 import threading
 from typing import Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 _BUF = 65536
 
@@ -47,7 +47,7 @@ class ProxyForwarder:
         if not (parts.hostname and parts.port):
             raise ValueError("upstream proxy needs host and port")
         self._upstream: Tuple[str, int] = (parts.hostname, parts.port)
-        token = "%s:%s" % (parts.username or "", parts.password or "")
+        token = "%s:%s" % (unquote(parts.username or ""), unquote(parts.password or ""))
         self._auth = b"Proxy-Authorization: Basic " + base64.b64encode(token.encode()) + b"\r\n"
         self._server: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
