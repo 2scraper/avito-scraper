@@ -38,6 +38,9 @@ jobs:
       HAS_TWOCAPTCHA_KEY: ${{ secrets.TWOCAPTCHA_KEY != '' }}
       HAS_AVITO_PROXY: ${{ secrets.AVITO_PROXY != '' }}
       HAS_ACCOUNT_ID: ${{ vars.AVITO_BROWSER_ACCOUNT_ID != '' }}
+      # A ready endpoint from the owner (secret AVITO_CDP_ENDPOINT) is used as
+      # is; only without one does the job build its own from the account.
+      HAS_CDP: ${{ secrets.AVITO_CDP_ENDPOINT != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,7 +54,7 @@ jobs:
           missing=0
           [ "$HAS_TWOCAPTCHA_KEY" = "true" ] || { echo "::error::secret TWOCAPTCHA_KEY is not set — the canary cannot reach avito.ru"; missing=1; }
           [ "$HAS_AVITO_PROXY" = "true" ] || { echo "::error::secret AVITO_PROXY (the base Russian gateway login) is not set"; missing=1; }
-          [ "$HAS_ACCOUNT_ID" = "true" ] || { echo "::error::repository variable AVITO_BROWSER_ACCOUNT_ID is not set"; missing=1; }
+          [ "$HAS_CDP" = "true" ] || [ "$HAS_ACCOUNT_ID" = "true" ] || { echo "::error::neither secret AVITO_CDP_ENDPOINT nor repository variable AVITO_BROWSER_ACCOUNT_ID is set"; missing=1; }
           exit $missing
 
       - name: Install
@@ -59,7 +62,46 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-playwright.txt
 
+      - name: Use the given endpoint, on a fresh Russian session
+        if: env.HAS_CDP == 'true'
+        # The owner's endpoint is re-pointed at a Russian exit: `country-ru`,
+        # and a `-proxy-<base64url>` segment carrying a session freshly minted
+        # on AVITO_PROXY. The solver gets that SAME session, so a solved
+        # captcha leaves from the browser's IP. Both are written to a 0600
+        # .env from the environment and never printed.
+        env:
+          AVITO_CDP_ENDPOINT: ${{ secrets.AVITO_CDP_ENDPOINT }}
+          AVITO_PROXY: ${{ secrets.AVITO_PROXY }}
+        run: |
+          install -m 600 /dev/null .env
+          python3 - <<'PY2'
+          import base64, os, re, sys
+          from urllib.parse import urlsplit, urlunsplit, quote, unquote
+          sys.path.insert(0, "tools"); sys.path.insert(0, ".")
+          import browser_profile_client as bpc
+          proxy_url = bpc.minted_proxy(60)  # fresh -session-/-sessTime-60 on AVITO_PROXY
+          ep = urlsplit(os.environ["AVITO_CDP_ENDPOINT"].strip())
+          user = unquote(ep.username or "")
+          if not user or "-zone-" not in user:
+              sys.exit("!! AVITO_CDP_ENDPOINT has no Scraping Browser login segment")
+          user = re.sub(r"-proxy-[A-Za-z0-9_=-]+$", "", user)
+          if re.search(r"-country-[a-z]{2}", user):
+              user = re.sub(r"-country-[a-z]{2}", "-country-ru", user)
+          else:
+              user = re.sub(r"(-zone-[a-z_]+)", r"\1-country-ru", user, count=1)
+          enc = base64.urlsafe_b64encode(proxy_url.encode()).decode().rstrip("=")
+          user += "-proxy-" + enc
+          netloc = quote(user, safe="-_.~") + ":" + quote(unquote(ep.password or ""), safe="-_.~") + "@" + ep.hostname + (f":{ep.port}" if ep.port else "")
+          uri = urlunsplit((ep.scheme, netloc, ep.path, ep.query, ep.fragment))
+          with open(".env", "w", encoding="utf-8") as f:
+              f.write("AVITO_CDP_ENDPOINT=" + uri + "\n")
+              f.write("AVITO_PROXY=" + proxy_url + "\n")
+          print("endpoint         :", bpc.mask_url(uri), "(country-ru, custom proxy segment)")
+          print("solver proxy     :", bpc.mask_url(proxy_url), "(same session)")
+          PY2
+
       - name: Build a fresh endpoint and its matching solver proxy
+        if: env.HAS_CDP != 'true'
         # Credentials through the ENVIRONMENT, never argv. The tool writes
         # AVITO_CDP_ENDPOINT and the minted AVITO_PROXY into a 0600 .env and
         # prints both masked.
