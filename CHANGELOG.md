@@ -18,6 +18,18 @@ entry in a blockquote.
 
 ### Fixed
 
+* **The canary's run check crashed on a good run.** Its success message still
+  named a seller count whose computation had been removed, so the first
+  complete live scrape (150 rows, 2026-10-16) ended in a `NameError` and a red
+  job. The message no longer uses it, and the suite now runs the check on a
+  synthetic good run and on a broken one.
+* **The canary can use a ready Scraping Browser endpoint.** With the
+  `AVITO_CDP_ENDPOINT` secret set, the job uses that endpoint instead of
+  building one from `AVITO_BROWSER_ACCOUNT_ID`, re-pointed at a Russian exit:
+  `country-ru` and a `-proxy-` segment carrying a session freshly minted on
+  `AVITO_PROXY`, which the captcha solver then uses too. Measured 2026-10-16:
+  148 rows over 3 pages, complete; the same endpoint without the Russian
+  proxy did not clear the firewall's proof-of-work.
 * **`tools/browser_profile_client.py` hid the Browser API's error code.** An
   HTTP error from the API was reported as the bare status ("404 Client Error:
   Not Found"), dropping the body that names the cause, e.g.
