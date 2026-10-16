@@ -18,6 +18,11 @@ entry in a blockquote.
 
 ### Fixed
 
+* **`tools/browser_profile_client.py` hid the Browser API's error code.** An
+  HTTP error from the API was reported as the bare status ("404 Client Error:
+  Not Found"), dropping the body that names the cause, e.g.
+  `ERROR_ACCOUNT_NOT_FOUND` for a profile id passed as `--account-id`. The
+  body is now printed with credentials masked.
 * **Session minting on a gateway URL with no login.** `connection
   --mint-session` spliced the new login in front of `http://` when
   `AVITO_PROXY` had an empty username, so the rebuilt URL had no host and the
