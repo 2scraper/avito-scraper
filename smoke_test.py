@@ -2145,6 +2145,45 @@ def test_canary_cannot_go_green_without_scraping():
     check("and no longer a seller-name share", "rows name a seller" not in checks)
 
 
+def test_the_canary_run_check_passes_a_good_run():
+    # The canary's run check only executes after a successful live scrape, so
+    # a crash in its success path stays hidden until the first green run: on
+    # 2026-10-16 it died with a NameError on a 150-row run that had worked.
+    # Run it here on a synthetic good run, and on a broken one.
+    import importlib.util
+    import tempfile
+    from output_writer import SOURCE_DEFAULT
+    spec = importlib.util.spec_from_file_location(
+        "ci_checks_under_test", os.path.join(HERE, ".github", "ci_checks.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    rows = [{"sku": str(1000 + i), "url": "https://www.avito.ru/moskva/x/%d" % i,
+             "title": "item %d" % i, "price": 100 + i, "original_price": None,
+             "region_slug": "moskva", "page": 1 + i // 50, "position": i % 50}
+            for i in range(150)]
+    meta = {"status": "complete", "pages_completed": 3, "source": SOURCE_DEFAULT,
+            "stop_reason": "max_pages"}
+    with tempfile.TemporaryDirectory() as tmp:
+        prefix = os.path.join(tmp, "canary")
+        with open(prefix + ".json", "w", encoding="utf-8") as f:
+            json.dump(rows, f)
+        with open(prefix + ".meta.json", "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+        try:
+            failed = mod.run_check(prefix)
+        except Exception as exc:  # noqa: BLE001
+            failed = ["raised %s: %s" % (type(exc).__name__, exc)]
+        check("the canary run check passes a good 150-row run", failed == [],
+              "(got %r)" % (failed,))
+        rows[0]["price"] = None
+        rows[1]["sku"] = ""
+        with open(prefix + ".json", "w", encoding="utf-8") as f:
+            json.dump(rows, f)
+        failed = mod.run_check(prefix)
+        check("and fails one with a row missing its sku",
+              any("no sku" in x for x in failed), "(got %r)" % (failed,))
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for test in tests:

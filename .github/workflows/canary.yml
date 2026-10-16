@@ -88,7 +88,7 @@ jobs:
           if re.search(r"-country-[a-z]{2}", user):
               user = re.sub(r"-country-[a-z]{2}", "-country-ru", user)
           else:
-              user = user.replace("-zone-scraping_browser", "-zone-scraping_browser-country-ru", 1)
+              user = re.sub(r"(-zone-[a-z_]+)", r"\1-country-ru", user, count=1)
           enc = base64.urlsafe_b64encode(proxy_url.encode()).decode().rstrip("=")
           user += "-proxy-" + enc
           netloc = quote(user, safe="-_.~") + ":" + quote(unquote(ep.password or ""), safe="-_.~") + "@" + ep.hostname + (f":{ep.port}" if ep.port else "")

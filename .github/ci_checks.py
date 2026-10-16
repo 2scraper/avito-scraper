@@ -175,7 +175,7 @@ def run_check(prefix="sample_output"):
         failed.append(f"{len(inverted)} row(s) have an original_price at or below their price")
     if not failed:
         print(f"ok       {len(rows)} rows, status={meta.get('status')}, "
-              f"{priced} priced, {named} named sellers, "
+              f"{priced} priced, "
               f"stop_reason={meta.get('stop_reason')!r}")
     return failed
 
