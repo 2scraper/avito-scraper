@@ -63,15 +63,21 @@ jobs:
           pip install -r requirements.txt -r requirements-playwright.txt
 
       - name: Use the given endpoint, on a fresh Russian session
-        if: env.HAS_CDP == 'true'
+        if: env.HAS_CDP == 'true' || env.HAS_ACCOUNT_ID == 'true'
         # The owner's endpoint is re-pointed at a Russian exit: `country-ru`,
         # and a `-proxy-<base64url>` segment carrying a session freshly minted
         # on AVITO_PROXY. The solver gets that SAME session, so a solved
         # captcha leaves from the browser's IP. Both are written to a 0600
         # .env from the environment and never printed.
+        # Source: the account's own connectionUri from GET /browser/accounts,
+        # fetched fresh each run when AVITO_BROWSER_ACCOUNT_ID is set (a stored
+        # endpoint stopped connecting after ~13 minutes, 2026-10-16); else the
+        # AVITO_CDP_ENDPOINT secret.
         env:
           AVITO_CDP_ENDPOINT: ${{ secrets.AVITO_CDP_ENDPOINT }}
           AVITO_PROXY: ${{ secrets.AVITO_PROXY }}
+          TWOCAPTCHA_KEY: ${{ secrets.TWOCAPTCHA_KEY }}
+          ACCOUNT_ID: ${{ vars.AVITO_BROWSER_ACCOUNT_ID }}
         run: |
           install -m 600 /dev/null .env
           python3 - <<'PY2'
@@ -80,7 +86,21 @@ jobs:
           sys.path.insert(0, "tools"); sys.path.insert(0, ".")
           import browser_profile_client as bpc
           proxy_url = bpc.minted_proxy(60)  # fresh -session-/-sessTime-60 on AVITO_PROXY
-          ep = urlsplit(os.environ["AVITO_CDP_ENDPOINT"].strip())
+          given = os.environ.get("AVITO_CDP_ENDPOINT", "").strip()
+          if os.environ.get("ACCOUNT_ID", "").strip():
+              key = os.environ["TWOCAPTCHA_KEY"]
+              aid = int(os.environ["ACCOUNT_ID"])
+              data = bpc._call("GET", "/browser/accounts", key, params={"key": key})
+              acc = next((d for d in bpc.dicts_in(data)
+                          if d.get("id") == aid and "connectionUri" in d), None)
+              if acc is None:
+                  sys.exit(f"!! no browser account {aid} in GET /browser/accounts")
+              given = ((acc.get("profile") or {}).get("connectionUri")
+                       or acc.get("connectionUri") or "")
+              print("endpoint source  : account", aid, "connectionUri (fresh)")
+          else:
+              print("endpoint source  : secret AVITO_CDP_ENDPOINT")
+          ep = urlsplit(given)
           user = unquote(ep.username or "")
           if not user or "-zone-" not in user:
               sys.exit("!! AVITO_CDP_ENDPOINT has no Scraping Browser login segment")
@@ -101,7 +121,7 @@ jobs:
           PY2
 
       - name: Build a fresh endpoint and its matching solver proxy
-        if: env.HAS_CDP != 'true'
+        if: env.HAS_CDP != 'true' && env.HAS_ACCOUNT_ID != 'true'
         # Credentials through the ENVIRONMENT, never argv. The tool writes
         # AVITO_CDP_ENDPOINT and the minted AVITO_PROXY into a 0600 .env and
         # prints both masked.
