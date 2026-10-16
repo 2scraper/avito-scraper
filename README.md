@@ -116,6 +116,20 @@ For a local browser (no endpoint), `AVITO_PROXY` is the browser's exit; a
 gateway login without `-session-` is pinned to one session for the run
 automatically.
 
+`AVITO_PROXY` must carry the gateway's login and password, in either form:
+
+```text
+http://LOGIN:PASSWORD@HOST:PORT     # a URL
+HOST:PORT:LOGIN:PASSWORD            # as the 2Captcha dashboard exports it
+```
+
+The second form may also start with `http://`; it is rewritten to the first,
+with the login and password percent-encoded, so a password containing `@`,
+`:` or `/` works in either. A gateway URL without a login (the IP-whitelisted
+form, `http://HOST:PORT`) is refused with a message saying
+so: the `-session-` and `-sessTime-` ids that pin an exit live inside the
+login, so such a URL cannot be minted or pinned.
+
 `python3 env_config.py` shows what was picked up, without printing secrets.
 
 ---

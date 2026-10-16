@@ -8,6 +8,33 @@ entry in a blockquote.
 
 ## [Unreleased]
 
+> **`AVITO_PROXY` / `--proxy` accept the dashboard's colon form.**
+> `host:port:login:password` (with or without `http://`) is now read as
+> `http://login:password@host:port` instead of being refused or misread. A
+> 2Captcha gateway URL without a login is now refused when a session has to
+> be minted or pinned — `tools/browser_profile_client.py connection
+> --mint-session` exits 1 and the scrapers exit 2 — with a message naming the
+> required form.
+
+### Fixed
+
+* **Session minting on a gateway URL with no login.** `connection
+  --mint-session` spliced the new login in front of `http://` when
+  `AVITO_PROXY` had an empty username, so the rebuilt URL had no host and the
+  run died with "the URL given is not one" of a 2Captcha gateway — a message
+  about the host, for a problem with the login. The login is now replaced in
+  the URL's netloc, and a gateway credential without a login and password is
+  refused by name.
+* **The dashboard's `host:port:login:password` credential.** Read as a URL it
+  has no username and a "port" of `port:login:password`; it looked like an
+  IP-whitelisted gateway, and the parser's error about that port quoted the
+  login. It is now normalised to a URL wherever a proxy is read (`--proxy`,
+  `AVITO_PROXY`, `--proxy-file` lines, the browser-profile tool), and no
+  message built from it repeats the credential.
+* **Percent-encoded proxy passwords.** The login and password are decoded
+  before they reach Playwright, pyppeteer, the local forwarder and the
+  captcha solver's proxy fields; they were passed on still encoded.
+
 ## [1.1.0] — 2026-10-15
 
 > **Exit codes and file modes changed.** A run that ends with zero rows for

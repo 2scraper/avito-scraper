@@ -190,19 +190,22 @@ def pick_proxy(line: int | None):
         if not 1 <= line <= len(pool):
             sys.exit(f"!! --proxy-line must be 1..{len(pool)}")
         chosen, which = pool[line - 1], f"line {line} of {len(pool)}"
+    import proxy_pool
+    chosen = proxy_pool.normalize_proxy(chosen)
     p = urlparse(chosen)
     try:
         port = p.port
     except ValueError:
         port = None
     if not (p.scheme and p.hostname and port and p.username and p.password):
-        sys.exit(f"!! {POOL.name} {which} is not scheme://login:password@host:port")
+        sys.exit(f"!! {POOL.name} {which} is not scheme://login:password@host:port "
+                 "or host:port:login:password")
     return {
         "type": p.scheme,
         "host": p.hostname,
         "port": port,
-        "login": p.username,
-        "password": p.password,
+        "login": proxy_pool.credentials_of(p)[0],
+        "password": proxy_pool.credentials_of(p)[1],
     }, which, chosen
 
 
@@ -251,14 +254,22 @@ def minted_proxy(minutes: int) -> str:
     base = env_config.env_value("AVITO_PROXY")
     if not base:
         sys.exit("!! AVITO_PROXY is not set in .env")
+    # The dashboard's host:port:login:password form is accepted as well as
+    # the URL; both become one URL here before anything reads a login.
+    base = proxy_pool.normalize_proxy(base)
     if not proxy_pool.is_2captcha_gateway(base):
         sys.exit("!! AVITO_PROXY is not a 2Captcha gateway credential; "
                  "--mint-session only applies to one.")
-    parts = urlparse(base)
-    login = _re.sub(r"-sessTime-\d+", "", parts.username or "")
-    login = _re.sub(r"-session-[A-Za-z0-9]+", "", login) + "-sessTime-%d" % minutes
-    rebuilt = base.replace(parts.username or "", login, 1)
-    return proxy_pool.mint_sessions(rebuilt, 1)[0]
+    try:
+        base = proxy_pool.require_gateway_login(base, "AVITO_PROXY")
+        login = urlparse(base).username or ""
+        login = _re.sub(r"-sessTime-\d+", "", login)
+        login = _re.sub(r"-session-[A-Za-z0-9]+", "", login) + "-sessTime-%d" % minutes
+        rebuilt = proxy_pool.with_login(base, login)
+        return proxy_pool.mint_sessions(rebuilt, 1)[0]
+    except proxy_pool.ProxyError as exc:
+        # ProxyError messages are built from masked values only.
+        sys.exit(f"!! {exc}")
 
 
 def dicts_in(obj):
@@ -396,10 +407,12 @@ def cmd_connection_minted(args, key):
     """Build the endpoint on a fresh session AND store that session as
     AVITO_PROXY, so the browser and the solver share one exit."""
     proxy_url = minted_proxy(args.session_minutes)
+    import proxy_pool
     p = urlparse(proxy_url)
+    login, password = proxy_pool.credentials_of(p)
     body = {"key": key, "accountId": args.account_id,
             "customProxy": {"type": p.scheme, "host": p.hostname, "port": p.port,
-                            "login": p.username, "password": p.password}}
+                            "login": login, "password": password}}
     pid = args.profile_id or profile_id_from_env()
     if pid:
         body["profileId"] = pid

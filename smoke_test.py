@@ -1034,6 +1034,182 @@ def test_both_gateway_brands_are_recognised():
     check("anything else is not", not proxy_pool.is_2captcha_gateway(PLACEHOLDER_PROXY))
 
 
+# A gateway credential as the 2Captcha dashboard exports it, and pieces of
+# one with characters that need percent-encoding in a URL. Assembled from
+# parts for the same reason as GATEWAY_PROXY.
+GATEWAY_HOST = "ru.proxy." + "2captcha.com"
+GATEWAY_LOGIN = "uEXAMPLE-zone-custom-region-RU"
+ODD_PASSWORD = "EX@MPLE:p/ss%w#rd"
+
+
+def _minted(value):
+    """tools/browser_profile_client.minted_proxy(60) on AVITO_PROXY=value:
+    ("ok", url) or ("exit", message). No .env is read and nothing is sent."""
+    import importlib.util
+    import pathlib
+    spec = importlib.util.spec_from_file_location(
+        "_bpc_under_test", os.path.join(HERE, "tools", "browser_profile_client.py"))
+    bpc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bpc)
+    bpc.ENV = pathlib.Path(HERE, "no-such-dir", ".env")
+    saved = os.environ.get("AVITO_PROXY")
+    os.environ["AVITO_PROXY"] = value
+    try:
+        return "ok", _quiet(bpc.minted_proxy, 60)
+    except SystemExit as exc:
+        return "exit", str(exc.code)
+    except Exception as exc:  # noqa: BLE001 -- the shape of the failure is the check
+        return "raised", "%s: %s" % (type(exc).__name__, exc)
+    finally:
+        if saved is None:
+            os.environ.pop("AVITO_PROXY", None)
+        else:
+            os.environ["AVITO_PROXY"] = saved
+
+
+def test_a_gateway_url_without_a_login_is_refused_by_name():
+    import proxy_pool
+    for label, value, secret in (
+            ("host-only", "http://" + GATEWAY_HOST + ":2334", None),
+            ("empty username", "http://:" + "EXAMPLE-PASS" + "@" + GATEWAY_HOST + ":2334",
+             "EXAMPLE-PASS"),
+            ("login, no password", "http://" + GATEWAY_LOGIN + "@" + GATEWAY_HOST + ":2334",
+             GATEWAY_LOGIN),
+            ("three colon fields", "http://" + GATEWAY_HOST + ":2334:" + GATEWAY_LOGIN,
+             GATEWAY_LOGIN)):
+        kind, msg = _minted(value)
+        eq("minted_proxy, %s: exits" % label, kind, "exit")
+        check("minted_proxy, %s: says the login is missing" % label,
+              "AVITO_PROXY has no login" in msg and "LOGIN:PASSWORD" in msg, "(got %r)" % msg)
+        check("minted_proxy, %s: not the misleading not-a-gateway message" % label,
+              "the URL given is not one" not in msg)
+        if secret:
+            check("minted_proxy, %s: the credential is not in the message" % label,
+                  secret not in msg)
+        try:
+            proxy_pool.mint_sessions(value, 1)
+            check("mint_sessions, %s: refused" % label, False)
+        except proxy_pool.ProxyError as exc:
+            check("mint_sessions, %s: refused for the login" % label,
+                  "has no login" in str(exc), "(got %r)" % str(exc))
+            if secret:
+                check("mint_sessions, %s: no credential in the message" % label,
+                      secret not in str(exc))
+
+
+def test_minted_proxy_rebuilds_the_login_in_the_netloc():
+    from urllib.parse import urlparse
+    import proxy_pool
+    url_form = "http://" + GATEWAY_LOGIN + ":" + "EXAMPLE-PASS" + "@" + GATEWAY_HOST + ":2334"
+    cases = (
+        ("plain login", url_form, "http", GATEWAY_LOGIN, "EXAMPLE-PASS"),
+        ("login already pinned",
+         url_form.replace(GATEWAY_LOGIN, GATEWAY_LOGIN + "-session-OLDsess01-sessTime-30"),
+         "http", GATEWAY_LOGIN, "EXAMPLE-PASS"),
+        ("socks5", "socks5" + url_form[4:], "socks5", GATEWAY_LOGIN, "EXAMPLE-PASS"),
+        ("%-encoded password",
+         url_form.replace("EXAMPLE-PASS", "EX%40MPLE%3Ap"), "http", GATEWAY_LOGIN, "EX@MPLE:p"),
+        ("dashboard colon form",
+         GATEWAY_HOST + ":2334:" + GATEWAY_LOGIN + ":" + "EXAMPLE-PASS",
+         "http", GATEWAY_LOGIN, "EXAMPLE-PASS"),
+        ("dashboard colon form with http://",
+         "http://" + GATEWAY_HOST + ":2334:" + GATEWAY_LOGIN + ":" + "EXAMPLE-PASS",
+         "http", GATEWAY_LOGIN, "EXAMPLE-PASS"),
+        ("colon form, password with @ : / % #",
+         GATEWAY_HOST + ":2334:" + GATEWAY_LOGIN + ":" + ODD_PASSWORD,
+         "http", GATEWAY_LOGIN, ODD_PASSWORD),
+    )
+    for label, value, scheme, login, password in cases:
+        kind, got = _minted(value)
+        eq("minted_proxy, %s: a URL" % label, kind, "ok")
+        if kind != "ok":
+            continue
+        p = urlparse(got)
+        eq("minted_proxy, %s: scheme kept" % label, p.scheme, scheme)
+        eq("minted_proxy, %s: gateway host kept" % label, p.hostname, GATEWAY_HOST)
+        eq("minted_proxy, %s: port kept" % label, p.port, 2334)
+        user, pw = proxy_pool.credentials_of(p)
+        eq("minted_proxy, %s: password intact" % label, pw, password)
+        check("minted_proxy, %s: login keeps its base" % label, user.startswith(login + "-"),
+              "(got %r)" % user)
+        eq("minted_proxy, %s: one sessTime, the requested one" % label,
+           (user.count("-sessTime-"), user.endswith("-sessTime-60")), (1, True))
+        eq("minted_proxy, %s: one fresh session" % label,
+           (user.count("-session-"), "OLDsess01" in user), (1, False))
+
+
+def test_the_dashboard_colon_form_is_a_proxy_url():
+    import captcha_solver
+    import proxy_pool
+    colon = GATEWAY_HOST + ":2334:" + GATEWAY_LOGIN + ":" + ODD_PASSWORD
+    for label, value in (("bare", colon), ("with http://", "http://" + colon)):
+        line = proxy_pool.parse_proxy_line(value)
+        check("colon form %s: parsed to a URL" % label,
+              line.startswith("http://") and line.endswith("@" + GATEWAY_HOST + ":2334"),
+              "(got %s)" % proxy_pool.mask(line))
+        check("colon form %s: a gateway" % label, proxy_pool.is_2captcha_gateway(value))
+        pw = proxy_pool.to_playwright(line)
+        eq("colon form %s: playwright gets the decoded login" % label,
+           pw.get("username"), GATEWAY_LOGIN)
+        eq("colon form %s: playwright gets the decoded password" % label,
+           pw.get("password"), ODD_PASSWORD)
+        eq("colon form %s: playwright server has no credential" % label,
+           pw.get("server"), "http://" + GATEWAY_HOST + ":2334")
+        fields = captcha_solver.proxy_task_fields(line)
+        eq("colon form %s: solver fields decoded" % label,
+           (fields.get("proxyAddress"), fields.get("proxyPort"),
+            fields.get("proxyLogin"), fields.get("proxyPassword")),
+           (GATEWAY_HOST, 2334, GATEWAY_LOGIN, ODD_PASSWORD))
+        for shown in (proxy_pool.mask(value), proxy_pool.mask(line)):
+            check("colon form %s: mask hides the password" % label,
+                  "p/ss" not in shown and GATEWAY_LOGIN not in shown, "(got %r)" % shown)
+        import base64
+        import proxy_forwarder
+        token = base64.b64encode((GATEWAY_LOGIN + ":" + ODD_PASSWORD).encode())
+        check("colon form %s: the forwarder sends the decoded credential" % label,
+              token in proxy_forwarder.ProxyForwarder(line)._auth)
+        minted = proxy_pool.mint_sessions(value, 2)
+        eq("colon form %s: sessions keep the password" % label,
+           [pw_ for _, pw_ in (proxy_pool.split_credentials(m)[1] for m in minted)],
+           [ODD_PASSWORD, ODD_PASSWORD])
+    # A malformed port still says what is wrong without repeating the value.
+    bad = "http://" + GATEWAY_HOST + ":23x4:" + GATEWAY_LOGIN + ":" + "EXAMPLE-PASS"
+    try:
+        proxy_pool.parse_proxy_line(bad)
+        check("bad port refused", False)
+    except proxy_pool.ProxyError as exc:
+        check("bad port refused without the credential",
+              "EXAMPLE-PASS" not in str(exc) and GATEWAY_LOGIN not in str(exc),
+              "(got %r)" % str(exc))
+
+
+def test_the_colon_form_reaches_every_engine_as_a_url():
+    import browser_bridge
+    import env_config
+    saved = {k: os.environ.get(k) for k in env_config.ENV_KEYS}
+    for k in env_config.ENV_KEYS:
+        os.environ[k] = ""
+    try:
+        parser = browser_bridge.build_parser("x")
+        colon = GATEWAY_HOST + ":2334:" + GATEWAY_LOGIN + ":" + "EXAMPLE-PASS"
+        b = _quiet(browser_bridge.parse_args, parser, ["--url", LISTING, "--proxy", colon])
+        check("colon --proxy: pinned to one session as a URL",
+              b.proxy.startswith("http://" + GATEWAY_LOGIN + "-session-")
+              and b.proxy.endswith("@" + GATEWAY_HOST + ":2334"))
+        try:
+            _quiet(browser_bridge.parse_args, browser_bridge.build_parser("x"),
+                   ["--url", LISTING, "--proxy", "http://" + GATEWAY_HOST + ":2334"])
+            check("host-only gateway --proxy: refused", False)
+        except SystemExit as exc:
+            eq("host-only gateway --proxy: usage error", exc.code, 2)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 def test_no_javascript_crosses_the_bridge():
     """The one JS body lives in captcha_solver and is written as a function
     BODY (Selenium's dialect); each engine wraps it. The bridge carries none."""
