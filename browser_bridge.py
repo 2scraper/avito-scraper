@@ -142,9 +142,18 @@ def wait_out_challenge(driver, url: str, budget_ms: int, log=None) -> str:
         driver.sleep(page_flow.CHALLENGE_POLL_MS)
         waited += page_flow.CHALLENGE_POLL_MS
         html = driver.content() or html
-        if P.detect_page_state(html, url=url) not in ("challenge",):
+        state = P.detect_page_state(html, url=url)
+        if state not in ("challenge",):
             if log:
-                log("  firewall proof-of-work cleared after %.0fs" % (waited / 1000.0))
+                # "cleared" only for a page that was recognised: one still
+                # loading is just no longer the challenge (manual test
+                # 2026-10-19 logged "cleared", then "nothing recognisable").
+                if state == "unknown":
+                    log("  firewall proof-of-work page gone after %.0fs — the next "
+                        "page is not recognisable yet" % (waited / 1000.0))
+                else:
+                    log("  firewall proof-of-work cleared after %.0fs (now: %s)"
+                        % (waited / 1000.0, state))
             return html
     if log:
         log("  proof-of-work did not clear within %.0fs" % (budget_ms / 1000.0))
@@ -510,9 +519,9 @@ def _check_urls(urls: List[str], mode: str) -> None:
                              "sort or filter parameters." % (u, rule))
         kind = P.page_kind(u)
         if kind != mode:
-            raise UsageError("refusing %s: that is %s page, not a %s page — use "
-                             "--mode %s" % (u, "an item" if kind == "item" else "a " + kind,
-                                            mode, kind))
+            article = lambda k: "an " + k if k == "item" else "a " + k
+            raise UsageError("refusing %s: that is %s page, not %s page — use "
+                             "--mode %s" % (u, article(kind), article(mode), kind))
 
 
 def _validated_urls(args) -> List[str]:
@@ -648,8 +657,10 @@ def _run_listing(driver, args, url, facts, seen, log) -> List[Product]:
         if page_flow.counts_as_blocked(state):
             facts["blocked"] = True
             facts["failed_pages"].append(page)
-            print("page %d: %s (HTTP %s, %d bytes)"
-                  % (page, state, result["status"], len(result["html"])), file=sys.stderr)
+            # The status is the FIRST response's — often the challenge the
+            # browser then got past — not that of the page the run stopped on.
+            print("page %d: %s (%d bytes; first response HTTP %s)"
+                  % (page, state, len(result["html"]), result["status"]), file=sys.stderr)
             break
         if state == "empty":
             log("  page %d is a served listing with no cards on it." % page)
@@ -697,8 +708,9 @@ def _run_items(driver, args, urls, facts, log) -> List[Any]:
         if page_flow.counts_as_blocked(result["state"]):
             facts["blocked"] = True
             facts["failed_pages"].append(i)
-            print("item %d: %s (HTTP %s) — stopping; the remaining items would "
-                  "meet the same wall" % (i, result["state"], result["status"]), file=sys.stderr)
+            print("item %d: %s (first response HTTP %s) — stopping; the remaining "
+                  "items would meet the same wall" % (i, result["state"], result["status"]),
+                  file=sys.stderr)
             break
         item = P.parse_item(result["html"], url=url, category=args.category)
         if item is None:

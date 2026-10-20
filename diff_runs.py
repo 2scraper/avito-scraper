@@ -169,6 +169,7 @@ def _check_comparable(args) -> bool:
     modes = {}
     listings = {}
     schemas = {}
+    caps = {}
     for label, path in (("--old", args.old), ("--new", args.new)):
         status, meta = _run_status(path)
         if status is None:
@@ -181,6 +182,11 @@ def _check_comparable(args) -> bool:
             continue
         scope = (meta or {}).get("scope") or {}
         schemas[label] = scope.get("schema_version")
+        # --max-products is part of what a run COVERED, like the page count:
+        # 145 rows against the same listing capped at 20 read as "127
+        # removed" (manual test 2026-10-19). A sidecar written before the cap
+        # was recorded reads as no cap.
+        caps[label] = scope.get("max_products")
         if scope.get("listing"):
             # The page count is part of what a listing run COVERED: page 3
             # of one run is simply absent from a 2-page run.
@@ -206,6 +212,10 @@ def _check_comparable(args) -> bool:
         problems.append(
             f"the two runs covered different listings or page counts ({listings}): "
             f"rows outside the overlap would read as added or removed.")
+    if len(set(caps.values())) > 1:
+        problems.append(
+            f"the two runs were capped differently by --max-products ({caps}): "
+            f"rows the capped run never fetched would read as removed.")
     if len(set(schemas.values())) > 1:
         problems.append(
             f"the two runs were written by different row schemas ({schemas}): "

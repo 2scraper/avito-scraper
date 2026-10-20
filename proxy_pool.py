@@ -340,7 +340,9 @@ class ProxyPool:
 # `eu.proxy.rucaptcha.com`; recognising only the 2captcha.com suffix made
 # session pinning and rotation silently not apply to it.
 _GATEWAY_SUFFIXES = (".proxy.2captcha.com", ".proxy.rucaptcha.com")
-_GATEWAY_SUFFIX = _GATEWAY_SUFFIXES[0]
+# For messages: every accepted gateway host, not just the first. The 2Captcha
+# dashboard hands out eu.proxy.rucaptcha.com logins too.
+_GATEWAY_HOSTS = " or ".join(_GATEWAY_SUFFIXES)
 _SESSION_RE = re.compile(r"-session-[A-Za-z0-9]+")
 _SESSTIME_RE = re.compile(r"-sessTime-\d+")
 # Nine characters, matching the ids the vendor's own exported list uses.
@@ -376,9 +378,9 @@ def require_gateway_login(url: str, name: str = "the proxy") -> str:
     if not (parts.username and parts.password):
         raise ProxyError(
             f"{name} has no login: session minting needs the gateway's "
-            f"LOGIN:PASSWORD form (http://LOGIN:PASSWORD@<host>{_GATEWAY_SUFFIX}:PORT "
-            f"or <host>{_GATEWAY_SUFFIX}:PORT:LOGIN:PASSWORD); an IP-whitelisted "
-            f"gateway URL cannot carry a -session-/-sessTime- id.")
+            f"LOGIN:PASSWORD form (http://LOGIN:PASSWORD@HOST:PORT or "
+            f"HOST:PORT:LOGIN:PASSWORD, HOST under {_GATEWAY_HOSTS}); an "
+            f"IP-whitelisted gateway URL cannot carry a -session-/-sessTime- id.")
     return url
 
 
@@ -434,7 +436,7 @@ def mint_sessions(url: str, count: int, rng: Optional[random.Random] = None) -> 
     if not is_2captcha_gateway(url):
         raise ProxyError(
             "--proxy-sessions only applies to a 2Captcha proxy gateway "
-            f"(a host under {_GATEWAY_SUFFIX}); the URL given is not one. "
+            f"(a host under {_GATEWAY_HOSTS}); the URL given is not one. "
             "Use --proxy-file for proxies from anywhere else.")
     url = require_gateway_login(url)
     rng = rng or random.Random()

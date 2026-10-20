@@ -25,10 +25,9 @@ canary*.meta.json
 *_debug.html
 *_debug.png
 *.html.page*
-*_p[0-9]*.html
-# --dump-html with any extension writes <root>_p<N><ext>
-*_p[0-9]*.txt
-*_p[0-9]*.htm
+# --dump-html X.ext writes X_p<N>.ext — matched by that SHAPE, whatever the
+# extension, rather than by a list of extensions someone has to extend.
+*_p[0-9]*.*
 
 # --- raw research captures ---------------------------------------------------
 recon/

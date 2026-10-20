@@ -69,7 +69,9 @@ RISKY_NAME = re.compile(r"\.(bak|orig|save|backup|swp|key|pem|p12|pfx)$|"
 
 TEMPLATE_MARKER = re.compile(r"[{<]\w+[}>]|example|placeholder|your[_-]", re.I)
 
-SKIP = ("smoke_test.py", "tools/scan_secrets.py", ".gitignore",
+# smoke_test.py is NOT here: it is the file a pasted key is most likely to
+# land in. Its own credential-shaped samples are assembled from pieces.
+SKIP = ("tools/scan_secrets.py", ".gitignore",
         ".githooks/pre-commit", ".githooks/pre-push")
 
 

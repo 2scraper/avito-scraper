@@ -310,8 +310,28 @@ def cmd_accounts(args, key):
     if args.raw:
         print(json.dumps(safe(data), indent=2, ensure_ascii=False))
         return
-    table(data, ["id", "login", "name"], "no accounts")
-    print("\nUse the id as --account-id.")
+    print_accounts(data)
+
+
+def print_accounts(data):
+    """One row per Scraping Browser ACCOUNT. Each account in the response
+    nests its project (id 1 on every account), its proxy account and its
+    default profile, all with an "id" of their own; listing every dict that
+    had one put the --account-id to use at row 17 of 21, unmarked
+    (manual test 2026-10-19)."""
+    listed = data.get("data") if isinstance(data, dict) else None
+    if isinstance(listed, dict):
+        listed = list(listed.values())
+    accounts = [a for a in listed or [] if isinstance(a, dict) and "id" in a]
+    if not accounts:
+        table(data, ["id", "login", "name"], "no accounts")
+        print("\nUse the account's id as --account-id.")
+        return
+    print(f"  {'account id':<12}{'name':<24}{'country':<9}profiles")
+    for a in accounts:
+        print(f"  {str(a.get('id')):<12}{str(a.get('name') or '-'):<24}"
+              f"{str(a.get('country') or '-'):<9}{a.get('profilesCount', '-')}")
+    print("\nPass the number from the 'account id' column as --account-id.")
 
 
 def cmd_proxy_accounts(args, key):

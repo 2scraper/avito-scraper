@@ -479,17 +479,23 @@ def finish_run(rows: Sequence[Any], out_prefix: str, fmt: str,
     if wrote_output:
         write_run_meta(out_prefix, dict(base, data_updated=True))
 
-    # The attempt sidecar: ALWAYS. See write_attempt_meta.
-    write_attempt_meta(out_prefix, dict(base, data_updated=bool(wrote_output)))
-
+    # The exit code is decided BEFORE the attempt sidecar is written, so the
+    # sidecar can carry it: it used to be computed afterwards, and every
+    # ending but a transport failure recorded `exit_code: null`.
     if not rows:
-        if blocked:
-            return EXIT_BLOCKED
-        return rc if complete else EXIT_REMOTE_API_ERROR
-    if not complete:
+        exit_code = EXIT_BLOCKED if blocked else (rc if complete else EXIT_REMOTE_API_ERROR)
+    elif not complete:
+        exit_code = EXIT_PARTIAL
+    else:
+        exit_code = rc
+
+    # The attempt sidecar: ALWAYS. See write_attempt_meta.
+    write_attempt_meta(out_prefix, dict(base, data_updated=bool(wrote_output),
+                                        exit_code=exit_code))
+
+    if rows and not complete:
         print(f"[!] Partial run: stopped after {pages_completed} of "
               f"{pages_requested} page(s) ({stop_reason}). The output holds "
               f"what was gathered, but it is NOT a complete view — see "
               f"{out_prefix}.meta.json.")
-        return EXIT_PARTIAL
-    return rc
+    return exit_code

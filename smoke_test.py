@@ -27,6 +27,7 @@ import json
 import os
 import re
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -1402,9 +1403,9 @@ def test_the_scanner_catches_the_file_that_actually_leaked():
     """The family's 2026-09-22 incident, reconstructed by SHAPE, never values."""
     scan = _scanner()
     leaked = ("TWOCAPTCHA_KEY=" + "0123456789abcdef" * 2 + "\n"
-              "AVITO_PROXY=http://uabc123def456-zone-custom-region-RU"
+              "AVITO_PROXY=http://uabc123def456" "-zo" "ne-custom-region-RU"
               ":uabc123def456@eu.proxy.rucaptcha.com:2334\n"
-              "AVITO_CDP_ENDPOINT=ws://bc9876fedcba-zone-scraping_browser"
+              "AVITO_CDP_ENDPOINT=ws://bc9876fedcba" "-zo" "ne-scraping_browser"
               "-country-ru-pid-pdeadbeef:Qq7RtYuIoPaSdF@cb.2captcha.com:9222\n")
     found = " | ".join(scan.scan_text(".env.user-endpoint.bak", leaked))
     for what in (".env file", "backup", "32-hex", "proxy gateway", "Scraping Browser"):
@@ -1437,6 +1438,59 @@ def test_gitignore_covers_every_env_variant_and_working_files():
     lines = {l.strip() for l in open(os.path.join(HERE, ".gitignore"), encoding="utf-8")}
     for pattern in (".env", ".env.*", "!.env.example", "*.bak", "live/", "proxylist*.txt"):
         check("gitignore has %r" % pattern, pattern in lines)
+
+
+def test_attempt_sidecar_records_the_exit_code_on_every_ending():
+    """README: the attempt sidecar is written on EVERY ending "with
+    `exit_code`". Only the transport-failure path set it; a complete run, a
+    block (3), an empty listing (4), a page that failed (5) and a partial run
+    (6) all wrote `exit_code: null` (manual test 2026-10-19)."""
+    import output_writer as O
+    row = O.Product(sku="1", title="t", url=LISTING)
+    cases = (([row], False, "completed", 0), ([], True, "blocked", 3),
+             ([], False, "pagination_exhausted", 4), ([], False, "pages_failed", 5),
+             ([row], False, "pages_failed", 6))
+    with tempfile.TemporaryDirectory() as tmp:
+        for rows, blocked, reason, want in cases:
+            prefix = os.path.join(tmp, "run_%s" % want)
+            rc = _quiet(O.finish_run, rows, prefix, "json", False, blocked=blocked,
+                        stop_reason=reason, pages_requested=2, pages_completed=1,
+                        start_url=LISTING, final_url=LISTING)
+            eq("finish_run returns %d (%s)" % (want, reason), rc, want)
+            meta = json.load(open(prefix + O.ATTEMPT_META_SUFFIX, encoding="utf-8"))
+            eq("attempt sidecar exit_code (%s)" % reason, meta.get("exit_code"), want)
+
+
+def test_the_scanner_reads_this_suite_too():
+    """The suite was exempt from the secret scan wholesale, so the file most
+    likely to receive a pasted credential was the one nobody read. Its own
+    credential-shaped samples are assembled from pieces instead, like the
+    banned tokens elsewhere in this file."""
+    scan = _scanner()
+    check("smoke_test.py is not exempt from the scan", "smoke_test.py" not in scan.SKIP)
+    text = open(os.path.join(HERE, "smoke_test.py"), encoding="utf-8").read()
+    eq("this suite holds nothing credential-shaped", scan.scan_text("smoke_test.py", text), [])
+    planted = text + "\nKEY = '" + "0123456789abcdef" * 2 + "'\n"
+    check("a key pasted into the suite is caught", scan.scan_text("smoke_test.py", planted) != [])
+
+
+def test_gitignore_covers_dumps_of_any_extension():
+    """`--dump-html X.ext` writes X_p<N>.ext, and each extension used to need
+    its own line (.html, .txt, .htm): `--dump-html snap.dat` left an
+    unignored page capture one `git add -A` from a commit. Asked of git
+    itself, since .gitignore precedence is easy to misread."""
+    def git(*a):
+        return subprocess.run(["git", *a], cwd=HERE, capture_output=True, text=True, timeout=30)
+    try:
+        if git("rev-parse", "--is-inside-work-tree").stdout.strip() != "true":
+            raise OSError
+    except (OSError, subprocess.SubprocessError):
+        skip("gitignore dump shapes (not a git checkout)")
+        return
+    for name in ("snap_p1.dat", "x_p12.md", "out_p3.html", "dump_p2.txt", "live2/page_p1.json"):
+        check("gitignored dump: %s" % name, git("check-ignore", "-q", "--no-index", name).returncode == 0)
+    tracked_but_ignored = [n for n in git("ls-files", "-ci", "--exclude-standard").stdout.splitlines() if n]
+    eq("no tracked file matches an ignore pattern", tracked_but_ignored, [])
 
 
 def test_fixtures_carry_no_session_or_personal_material():
@@ -1864,6 +1918,37 @@ def test_diff_runs_refuses_runs_it_cannot_vouch_for():
               _quiet(diff_runs._check_comparable, args) is True)
 
 
+def test_diff_runs_refuses_a_capped_run_against_a_full_one():
+    """A full listing run against the same listing capped by --max-products
+    read as "127 removed" (manual tests 2026-10-14 and 2026-10-19)."""
+    import diff_runs
+    import output_writer as O
+    with tempfile.TemporaryDirectory() as tmp:
+        old, new = os.path.join(tmp, "old.json"), os.path.join(tmp, "new.json")
+        for p in (old, new):
+            open(p, "w").write("[]")
+        args = argparse.Namespace(old=old, new=new)
+
+        def sidecar(path, cap, with_key=True):
+            scope = {"listing": LISTING, "pages": 3, "schema_version": O.schema_version(O.Product)}
+            if with_key:
+                scope["max_products"] = cap
+            open(path[:-5] + ".meta.json", "w").write(json.dumps(
+                {"status": "complete", "mode": "listing", "pages_completed": 3,
+                 "pages_requested": 3, "scope": scope}))
+
+        sidecar(old, None)
+        sidecar(new, 20)
+        check("full vs --max-products 20 -> refused",
+              _quiet(diff_runs._check_comparable, args) is False)
+        sidecar(old, 20)
+        check("both capped at 20 -> allowed", _quiet(diff_runs._check_comparable, args) is True)
+        sidecar(old, None, with_key=False)
+        sidecar(new, None)
+        check("an older sidecar without the key reads as no cap -> allowed",
+              _quiet(diff_runs._check_comparable, args) is True)
+
+
 def test_schema_version_is_per_mode():
     """P2-1: the fingerprint covered Product's field names only."""
     import output_writer as O
@@ -2028,7 +2113,7 @@ def test_selenium_cdp_endpoint_is_a_usage_question():
     usage error (2); the one in .env is shared by every engine and is ignored
     with a notice. It used to reach start() and exit 5 'transport_error'."""
     import browser_bridge
-    endpoint = "ws://u-zone-scraping_browser-country-ru:p@h:9222"
+    endpoint = "ws://u" + "-zo" + "ne-scraping_browser-country-ru:p@h:9222"
     try:
         _quiet(browser_bridge.parse_args, browser_bridge.build_parser("x"),
                ["--url", LISTING, "--cdp-endpoint", endpoint], cdp_supported=False)
@@ -2062,6 +2147,17 @@ def test_no_private_citations_in_shipped_files():
               "play" + "book " + "§", "template " + "§"]
     section = re.compile("§" + r"\s*\d")
     hits = []
+    # In a git checkout, "shipped" means what git could commit: tracked files
+    # and untracked ones that are not ignored. Walking the whole directory
+    # flagged a contributor's own notes file, excluded through
+    # .git/info/exclude, and kept the suite red on a clean tree.
+    try:
+        listed = subprocess.run(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            cwd=HERE, capture_output=True, text=True, timeout=30)
+        shippable = {n for n in listed.stdout.split("\0") if n} if listed.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        shippable = None
     for root, dirs, files in os.walk(HERE):
         dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "node_modules")
                    and not os.path.isfile(os.path.join(root, d, "pyvenv.cfg"))]
@@ -2074,6 +2170,8 @@ def test_no_private_citations_in_shipped_files():
             path = os.path.join(root, name)
             rel = os.path.relpath(path, HERE)
             if rel.split(os.sep)[0] in ("live", "build", "dist"):
+                continue
+            if shippable is not None and rel.replace(os.sep, "/") not in shippable:
                 continue
             try:
                 text = open(path, encoding="utf-8", errors="replace").read()
@@ -2182,6 +2280,144 @@ def test_the_canary_run_check_passes_a_good_run():
         failed = mod.run_check(prefix)
         check("and fails one with a row missing its sku",
               any("no sku" in x for x in failed), "(got %r)" % (failed,))
+
+
+def test_the_wait_log_says_what_it_saw():
+    """Manual test 2026-10-19, step 39: "proof-of-work cleared after 1s" was
+    logged for a page that was merely not the challenge any more — the next
+    line was "nothing recognisable yet" — and the final "page 1: blocked
+    (HTTP 439, ...)" quoted the FIRST response's status, not the page the run
+    stopped on."""
+    import browser_bridge
+    import product_parser as P
+    wall = fixture("wall_captcha.html")
+    challenge = re.sub(r'<form[^>]*js-firewall-form.*?</form>', "", wall, flags=re.S)
+    loading = "<html><head><title>avito</title></head><body></body></html>"
+
+    class Pages:
+        def __init__(self, docs):
+            self.docs = list(docs)
+
+        def content(self):
+            return self.docs.pop(0) if len(self.docs) > 1 else self.docs[0]
+
+        def sleep(self, ms):
+            pass
+
+    for docs, cleared in (([challenge, loading], False),
+                          ([challenge, fixture("listing_dom.html")], True)):
+        lines = []
+        browser_bridge.wait_out_challenge(Pages(docs), LISTING + "?p=2", 5000, log=lines.append)
+        said = " | ".join(lines)
+        state = P.detect_page_state(docs[-1], url=LISTING + "?p=2")
+        check("wait log after the challenge (%s): %s" % (state, "cleared" if cleared else "not cleared"),
+              ("cleared" in said) == cleared, "(log %r)" % said)
+
+    src = inspect.getsource(browser_bridge)
+    for stop_line in ('"page %d: %s (%d bytes; first response HTTP %s)"',
+                      '"item %d: %s (first response HTTP %s)'):
+        check("stop line names the FIRST response's status as such: %s" % stop_line[:20],
+              stop_line in src)
+    check("no stop line prints a bare status", '"page %d: %s (HTTP %s' not in src
+          and '"item %d: %s (HTTP %s)' not in src)
+
+
+def test_accounts_lists_accounts_only():
+    """`accounts` printed every dict carrying an "id" — each account's
+    project (id=1, seven times), proxy account and default profile — so the
+    one number to pass as --account-id was row 17 of 21 with nothing saying
+    which (manual test 2026-10-19, step 13). The shape is GET
+    /browser/accounts as measured that day; values are invented."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_bpc_accounts", os.path.join(HERE, "tools", "browser_profile_client.py"))
+    bpc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bpc)
+
+    def account(acc_id, name, proxy_id, profile_id, count):
+        return {"id": acc_id, "name": name, "login": "bc" + "0000" + str(acc_id),
+                "password": "x" * 12, "country": "ru", "profilesCount": count,
+                "defaultProfileId": profile_id, "proxyAccountId": proxy_id,
+                "project": {"id": 1, "code": "2captcha", "name": "2captcha"},
+                "proxy": {"id": proxy_id, "login": "u" + "abcd" + "123", "password": "y" * 10},
+                "profile": {"id": profile_id, "name": "Default profile", "accountId": acc_id,
+                            "project": {"id": 1, "name": "2captcha"}}}
+    data = {"status": 1, "count": 2, "project": {"id": 1, "name": "2captcha"},
+            "data": {"0": account(192603, "ru-ticket-acc", 2107, 1457373, 3),
+                     "1": account(148116, "testing", 2020, 1169204, 1)}}
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        bpc.print_accounts(data)
+    text = out.getvalue()
+    for acc_id in ("192603", "148116"):
+        check("accounts: lists account %s" % acc_id, acc_id in text, text)
+    for other in ("2107", "2020", "1457373", "1169204"):
+        check("accounts: no proxy-account/profile id %s on its own row" % other,
+              not re.search(r"(?m)^\s*(?:account\s*)?id[=:\s]+%s\b" % other, text), text)
+    eq("accounts: one row per account", len(re.findall(r"(?m)^\s+\d+\s", text)), 2)
+    check("accounts: says which number is --account-id", "--account-id" in text, text)
+    check("accounts: no credential", "x" * 12 not in text and "y" * 10 not in text, text)
+
+
+def test_gateway_hints_name_every_accepted_host():
+    # The owner's gateway is eu.proxy.rucaptcha.com; the hint named only
+    # .proxy.2captcha.com (manual test 2026-10-19, step 36).
+    import proxy_pool
+    messages = []
+    for call in (lambda: proxy_pool.require_gateway_login("http://eu.proxy.rucaptcha.com:2334"),
+                 lambda: proxy_pool.mint_sessions("http://user1234:pass5678@proxy.example.com:8080", 1)):
+        try:
+            call()
+            check("gateway hint raised", False)
+        except proxy_pool.ProxyError as exc:
+            messages.append(str(exc))
+    for msg in messages:
+        for suffix in proxy_pool._GATEWAY_SUFFIXES:
+            check("hint names %s: %s…" % (suffix, msg[:30]), suffix in msg, "(got %r)" % msg)
+
+
+def test_wrong_mode_refusal_reads_as_english():
+    # "that is a listing page, not a item page" (manual test 2026-10-19,
+    # step 34): the second article was hard-coded.
+    import browser_bridge
+    for urls, mode, want in (([LISTING], "item", "not an item page"),
+                             ([ITEM_COMPANY], "listing", "that is an item page, not a listing page"),
+                             ([SELLER], "listing", "not a listing page")):
+        try:
+            browser_bridge._check_urls(urls, mode)
+            check("refused --mode %s" % mode, False)
+        except SystemExit as exc:
+            check("refusal wording for --mode %s: %r" % (mode, want), want in str(exc),
+                  "(got %r)" % str(exc))
+            check("no 'a item' in --mode %s refusal" % mode, " a item " not in str(exc),
+                  "(got %r)" % str(exc))
+
+
+def test_env_report_hides_every_credential_form():
+    # `python3 env_config.py` hid a value only when it held "@", so the
+    # dashboard's host:port:login:password proxy (no "@") was printed whole,
+    # password included (manual test 2026-10-19, step 12).
+    import env_config
+    login, password = "EXAMPLE" + "LOGIN-zone-custom", "EXAMPLE" + "PASSWORD99"
+    forms = {
+        "AVITO_PROXY": ["eu.proxy.rucaptcha.com:2334:%s:%s" % (login, password),
+                        "http://eu.proxy.rucaptcha.com:2334:%s:%s" % (login, password),
+                        "http://%s:%s@eu.proxy.rucaptcha.com:2334" % (login, password)],
+        "AVITO_CDP_ENDPOINT": ["ws://%s:%s@cb.2captcha.com:9222" % (login, password)],
+        "TWOCAPTCHA_KEY": [password],
+    }
+    for name, values in forms.items():
+        for value in values:
+            shown = env_config.describe(name, value)
+            check("env report hides the password of %s (%s…)" % (name, value[:12]),
+                  password not in shown, "(got %r)" % shown)
+            check("env report hides the login of %s (%s…)" % (name, value[:12]),
+                  login not in shown, "(got %r)" % shown)
+    proxy = env_config.describe("AVITO_PROXY", forms["AVITO_PROXY"][0])
+    check("env report keeps the proxy's host and port", "eu.proxy.rucaptcha.com:2334" in proxy,
+          "(got %r)" % proxy)
+    eq("env report shows a non-secret value", env_config.describe("AVITO_URL", "https://www.avito.ru/x"),
+       "set (https://www.avito.ru/x)")
 
 
 def main():
