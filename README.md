@@ -24,7 +24,9 @@ actually needs.
 > secrets `TWOCAPTCHA_KEY` and `AVITO_PROXY` and the variable
 > `AVITO_BROWSER_ACCOUNT_ID`; without them it is **red**, naming what is
 > missing, rather than green without having scraped anything. A blocked run,
-> one that never reached the site, or zero rows is red too. The live
+> one that never reached the site, or zero rows is red too — after ONE retry
+> on a fresh proxy session when the run exits 5 (a refused connection or a
+> page load that died on the exit). The live
 > measurements are in [Measured results](#measured-results), with their dates.
 
 ---
@@ -62,7 +64,7 @@ implemented from the wall's code and 2Captcha's task format, never met live.
 | … the GeeTest wall, 2Captcha `GeeTestTask` through the **browser's own exit** | **3 of 3** `verified`, 36–73 s, $0.00299 each |
 | … the same, local Chromium | **2 of 3** (one `ERROR_CAPTCHA_UNSOLVABLE`) |
 | … the same, solved **without** the browser's proxy | **0 of 1** — the site answered with a second captcha |
-| … the same, local Chromium, re-measured 2026-10-14 to 2026-10-20 | **0 of 14** `verified` — the site served the captcha or the wait wall again after each |
+| … the same, local Chromium, every solve 2026-10-14 to 2026-10-20 | **0 of 15** `verified` — the site served the captcha or the wait wall again after each |
 | Scraping Browser API, 11 runs of every mode, 2026-10-19 | **met no wall at all**; no solve was bought |
 | the wall, left unsolved | 0 of 3 cleared on its own within 140 s |
 
@@ -71,7 +73,7 @@ scraper passes the browser's own exit as the task's proxy and refuses to buy
 a solve without one. **But in a control on 2026-10-14 the solver did not use
 that proxy:** `GeeTestTask` returned a solution for a proxy with a wrong
 password and for a proxy host that does not exist. Local-browser solves
-have been refused since (0 of 14 above).
+have been refused since (0 of 15 above).
 That the token comes from another IP is the likeliest reason, not a proven
 one. **Use the Scraping Browser:** once a profile has passed the wall, its
 cookies carry it — a dozen consecutive pages of listings, items and seller
@@ -308,8 +310,8 @@ pyppeteer is effectively unmaintained; it is here for parity.
 | `2` | Bad usage — wrong host, wrong `--mode` for the URL, a robots-disallowed URL, an unreadable `--from` file |
 | `3` | Blocked — the firewall stayed up after every rung |
 | `4` | Zero results — the listing was read to its end and is empty, including a search with no matches |
-| `5` | Content never obtained — **our** plumbing (a navigation timeout, a dead exit, `profile_locked`, `proxy_error`), or zero rows for any reason other than a listing read to its end: a failed page, an item page with no item on it, a seller profile that never parsed |
-| `6` | Partial — some pages fetched, then stopped; in `--mode seller`, fewer listings written than the profile's own counter |
+| `5` | Content never obtained — **our** plumbing (a navigation timeout, a dead exit, `profile_locked` still held after 3 retries 10 s apart, `proxy_error`), or zero rows for any reason other than a listing read to its end: a failed page, an item page with no item on it, a seller profile that never parsed |
+| `6` | Partial — some pages fetched, then stopped (a connection that dropped AFTER them keeps them: the rows are written); in `--mode seller`, fewer listings written than the profile's own counter |
 
 A page buys at most one paid captcha solve per run
 (`page_flow.SOLVES_PER_PAGE`): a fresh exit re-fetches a page that stayed
@@ -409,7 +411,7 @@ own venv and builds the Docker image.
   persistent profile, so most pages after the first never meet the wall.
 * **[Captcha solving](https://2captcha.com)** — `TWOCAPTCHA_KEY`. GeeTest v4
   through `GeeTestTask`: 3 of 3 on the Scraping Browser (2026-10-06),
-  $0.00299 each. On a local browser the solutions were refused 0 of 14
+  $0.00299 each. On a local browser the solutions were refused 0 of 15
   (2026-10-14 to 10-20) — see [the one thing you actually need](#the-one-thing-you-actually-need).
   At most one paid solve per page per run.
 * **Fingerprints** — `fingerprint_client.py`. Not used over CDP, where the

@@ -78,7 +78,7 @@ entry in a blockquote.
 ### Changed
 
 * **README, GeeTest:** the "3 of 3 verified" table now carries the later
-  measurements — local-browser solves refused 0 of 14 (2026-10-14 to 10-20), a
+  measurements — local-browser solves refused 0 of 15 (2026-10-14 to 10-20), a
   control in which `GeeTestTask` returned solutions for an unreachable
   proxy, and 11 Scraping Browser runs that met no wall (2026-10-19) — and
   says to use the Scraping Browser.
