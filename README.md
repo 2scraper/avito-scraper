@@ -24,7 +24,9 @@ actually needs.
 > secrets `TWOCAPTCHA_KEY` and `AVITO_PROXY` and the variable
 > `AVITO_BROWSER_ACCOUNT_ID`; without them it is **red**, naming what is
 > missing, rather than green without having scraped anything. A blocked run,
-> one that never reached the site, or zero rows is red too. The live
+> one that never reached the site, or zero rows is red too — after ONE retry
+> on a fresh proxy session when the run exits 5 (a refused connection or a
+> page load that died on the exit). The live
 > measurements are in [Measured results](#measured-results), with their dates.
 
 ---
@@ -33,7 +35,7 @@ actually needs.
 
 **A real browser on a Russian exit — and, more often than not, a captcha
 solve.** Everything below was measured on **2026-10-06** through a Russian
-residential exit.
+residential exit, unless a row gives another date.
 
 avito.ru sits behind its own firewall, «Доступ ограничен: проблема с IP».
 Its own text says why: *too many requests from this address*. It answers in
@@ -62,12 +64,21 @@ implemented from the wall's code and 2Captcha's task format, never met live.
 | … the GeeTest wall, 2Captcha `GeeTestTask` through the **browser's own exit** | **3 of 3** `verified`, 36–73 s, $0.00299 each |
 | … the same, local Chromium | **2 of 3** (one `ERROR_CAPTCHA_UNSOLVABLE`) |
 | … the same, solved **without** the browser's proxy | **0 of 1** — the site answered with a second captcha |
+| … the same, local Chromium, every solve 2026-10-14 to 2026-10-20 | **0 of 15** `verified` — the site served the captcha or the wait wall again after each |
+| Scraping Browser API, 11 runs of every mode, 2026-10-19 | **met no wall at all**; no solve was bought |
 | the wall, left unsolved | 0 of 3 cleared on its own within 140 s |
 
-So: the solve has to go through **the same IP the browser uses**, and this
-scraper refuses to pay for one that does not. Once a profile has passed the
-wall, its cookies carry it: a dozen consecutive pages of listings, items and
-seller profiles came back without meeting it again.
+So: the solve has to go through **the same IP the browser uses**. The
+scraper passes the browser's own exit as the task's proxy and refuses to buy
+a solve without one. **But in a control on 2026-10-14 the solver did not use
+that proxy:** `GeeTestTask` returned a solution for a proxy with a wrong
+password and for a proxy host that does not exist. Local-browser solves
+have been refused since (0 of 15 above).
+That the token comes from another IP is the likeliest reason, not a proven
+one. **Use the Scraping Browser:** once a profile has passed the wall, its
+cookies carry it — a dozen consecutive pages of listings, items and seller
+profiles came back without meeting it again (2026-10-06), and the 2026-10-19
+test met no wall in 11 runs.
 
 There is **no paid-product-free path** on this site: no plain HTTP route, and
 a local browser meets the captcha on every fresh session.
@@ -148,7 +159,7 @@ python3 playwright_scraper.py --mode listing --url "https://www.avito.ru/moskva?
 # Item pages for what a listing run found (repeat --url, or --from a run's JSON)
 python3 playwright_scraper.py --mode item --from live/iphones.json --max-products 20 --out live/items
 
-# A seller profile, plus the listings it renders
+# A seller profile and all its listings (read from the seller's feed)
 python3 playwright_scraper.py --mode seller --url https://www.avito.ru/brands/<seller> --out live/seller
 ```
 
@@ -212,8 +223,11 @@ listings, as listing rows, up to the profile's own counter or
 seller's feed (`/brands/<slug>/all?sellerId=…`), which the scraper opens,
 arms with its «Показать все» button and scrolls — 15 more per scroll.
 Measured 2026-10-09: **353 of 353** in 22 scrolls, every row priced.
-Compare `listings_on_page` with `active_ads` to see whether the feed was
-read to the end; `transport_facts.seller_feed` says why it stopped.
+A shop whose profile carries no `sellerId` gets it from
+`/brands/<slug>/items` (robots allows that path; measured 2026-10-10 on a
+shop with 7331 listings). A run that wrote fewer listings than the
+profile's own counter ends **partial, exit 6** — compare `listings_on_page`
+with `active_ads`; `transport_facts.seller_feed` says why it stopped.
 
 **About robots.txt and the seller feed.** The scraper never requests a path
 avito.ru's robots.txt disallows. But scrolling the feed makes the PAGE'S OWN
@@ -296,8 +310,8 @@ pyppeteer is effectively unmaintained; it is here for parity.
 | `2` | Bad usage — wrong host, wrong `--mode` for the URL, a robots-disallowed URL, an unreadable `--from` file |
 | `3` | Blocked — the firewall stayed up after every rung |
 | `4` | Zero results — the listing was read to its end and is empty, including a search with no matches |
-| `5` | Content never obtained — **our** plumbing (a navigation timeout, a dead exit, `profile_locked`, `proxy_error`), or zero rows for any reason other than a listing read to its end: a failed page, an item page with no item on it, a seller profile that never parsed |
-| `6` | Partial — some pages fetched, then stopped |
+| `5` | Content never obtained — **our** plumbing (a navigation timeout, a dead exit, `profile_locked` still held after 3 retries 10 s apart, `proxy_error`), or zero rows for any reason other than a listing read to its end: a failed page, an item page with no item on it, a seller profile that never parsed |
+| `6` | Partial — some pages fetched, then stopped (a connection that dropped AFTER them keeps them: the rows are written); in `--mode seller`, fewer listings written than the profile's own counter |
 
 A page buys at most one paid captcha solve per run
 (`page_flow.SOLVES_PER_PAGE`): a fresh exit re-fetches a page that stayed
@@ -351,8 +365,17 @@ python3 diff_runs.py --old live/iphones.2026-10-06.json --new live/iphones.2026-
 ```
 
 Added / removed / changed by `sku`. Refuses runs that are incomplete, of
-different modes, or that covered a different listing or page count — every
-row outside the overlap would read as added or removed.
+different modes, or that covered a different listing, page count or
+`--max-products` cap — every row outside the overlap would read as added or
+removed (exit 2; `--force` compares anyway).
+
+**"Removed" means "not in these pages any more", not "delisted".** A run
+covers the first N pages of a listing, and avito re-orders a listing all
+the time (raised ads, fresh ads). Two runs of the same 3-page category
+(2026-10-19) differed by 47 added and 42 removed out of 145: listings that
+moved past page 3, not listings that were taken down. To tell the two
+apart, run `--mode item` on the removed ones — an ad that is gone answers
+exit 5 (no item data on the page).
 
 ---
 
@@ -387,7 +410,10 @@ own venv and builds the Docker image.
   it clears the proof-of-work variant by itself and keeps the clearance in a
   persistent profile, so most pages after the first never meet the wall.
 * **[Captcha solving](https://2captcha.com)** — `TWOCAPTCHA_KEY`. GeeTest v4
-  through `GeeTestTask`: 3 of 3 on the Scraping Browser, $0.00299 each.
+  through `GeeTestTask`: 3 of 3 on the Scraping Browser (2026-10-06),
+  $0.00299 each. On a local browser the solutions were refused 0 of 15
+  (2026-10-14 to 10-20) — see [the one thing you actually need](#the-one-thing-you-actually-need).
+  At most one paid solve per page per run.
 * **Fingerprints** — `fingerprint_client.py`. Not used over CDP, where the
   remote browser brings its own.
 

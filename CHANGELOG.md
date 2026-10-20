@@ -8,6 +8,100 @@ entry in a blockquote.
 
 ## [Unreleased]
 
+## [1.1.2] — 2026-10-20
+
+> **`python3 env_config.py` printed the dashboard-form proxy whole.** With
+> `AVITO_PROXY` written as `host:port:login:password` — the form 1.1.1 began
+> accepting — the report that promises "without printing secrets" printed
+> the login and password. If you ran it with that form and shared the
+> output, change the proxy password. Found in a manual test, 2026-10-19.
+>
+> **What changes for a scheduler or a script.** A run that gathered rows and
+> then lost its connection now exits **6** with those rows written (it was
+> **5** with nothing written). `<out>.latest_attempt.meta.json` now carries
+> `exit_code` on every ending (it was null except on a transport failure).
+> `diff_runs.py` refuses two runs capped differently by `--max-products`
+> (exit 2). `tools/browser_profile_client.py accounts` prints one row per
+> account with an `account id` column instead of every object with an id. A
+> connect answered `profile_locked` is retried for up to 30 s before exit 5.
+
+### Fixed
+
+* **`env_config.py` hid a value only when it contained `@`.** Credentials
+  are now hidden by variable name (`TWOCAPTCHA_KEY`, `AVITO_CDP_ENDPOINT`,
+  `AVITO_PROXY`); for the proxy the report keeps the exit's host and port.
+* **The attempt sidecar's `exit_code` was null on every normal ending.**
+  `<out>.latest_attempt.meta.json` is documented to carry it on every
+  ending; only a transport failure set it. A complete run, a block (3), an
+  empty listing (4), a page that failed (5) and a partial run (6) now record
+  it too.
+* **`diff_runs.py` compared a full run with one capped by `--max-products`**,
+  reporting every row the capped run never fetched as removed ("127
+  removed", 2026-10-19). It now refuses, like a different page count;
+  `--force` still compares.
+* **`tools/browser_profile_client.py accounts` listed every object with an
+  id** — each account's project (id 1, once per account), proxy account and
+  default profile — so the number to pass as `--account-id` was one row of
+  21, unmarked. It now prints one row per account with an `account id`
+  column; passing a profile id is what produced `ERROR_ACCOUNT_NOT_FOUND`.
+* **The proof-of-work log said "cleared" for a page still loading**, and a
+  run's stop line quoted the first response's status as if it were the
+  final page's. The log now says when the next page is not recognisable
+  yet, and the stop line labels the status "first response".
+* **A dropped connection after gathered pages threw the pages away.** Page 1
+  gave 50 rows over the Scraping Browser, page 2 died with
+  `ERR_CONNECTION_RESET`, and the run exited 5 with `products: 0` and no file
+  (2026-10-20). Rows gathered and then a transport failure is now a partial
+  run: exit 6, the rows written, the failed page named. A failure before any
+  row is still exit 5.
+* **`profile_locked` right after another run exited 5.** A run started just
+  after another on the same Scraping Browser profile was refused; 30 s later
+  it passed. That one answer is now retried 3 times, 10 s apart
+  (`page_flow.PROFILE_LOCKED_*`); a timeout or `proxy_error` is not.
+* **pyppeteer reported a Scraping Browser refusal as a bare `TimeoutError`.**
+  It never surfaces the service's answer; the message now says so, names the
+  likely causes and points to Playwright for the reason.
+* **The canary died on one dropped run.** Its endpoint step is the shipped
+  `tools/browser_profile_client.py canary-env` instead of 30 lines of Python
+  inside the workflow, and a live run that exits 5 is retried once on a
+  freshly minted session (a block or no rows is not retried).
+* **A captcha that appeared after the proof-of-work was never solved.** When
+  the proof-of-work went, the page in between was not recognisable, and the
+  captcha arrived during the next wait, the solve rung had already been
+  passed: the run rotated to a fresh exit instead (twice in three exits,
+  manual test 2026-10-19). The wall rungs now run once more after that wait.
+* **`diff_runs.py`'s refusal advised "re-run the incomplete side" for every
+  reason**, including two complete runs capped differently. The advice now
+  follows each reason (same `--max-products`, same listing and `--pages`,
+  same `--mode`, …).
+* **Wording:** "not a item page" → "not an item page"; the hint for a proxy
+  without a login names both gateway hosts (`.proxy.2captcha.com` and
+  `.proxy.rucaptcha.com`), not only the first.
+* **`.gitignore` covered `--dump-html` captures by extension** (`.html`,
+  `.txt`, `.htm`); `--dump-html snap.dat` left `snap_p1.dat` unignored. It
+  now matches the `_p<N>.<ext>` shape.
+* **The secret scan exempted `smoke_test.py` entirely.** It now reads it;
+  the suite's own credential-shaped samples are assembled from pieces.
+* **The suite's private-citation check walked ignored files**, so a
+  contributor's own notes excluded through `.git/info/exclude` kept it red.
+  In a git checkout it now reads only what git could commit.
+
+### Changed
+
+* **README, GeeTest:** the "3 of 3 verified" table now carries the later
+  measurements — local-browser solves refused 0 of 15 (2026-10-14 to 10-20), a
+  control in which `GeeTestTask` returned solutions for an unreachable
+  proxy, and 11 Scraping Browser runs that met no wall (2026-10-19) — and
+  says to use the Scraping Browser.
+* **CONTRIBUTING:** a captcha solve is *sent with* the browser's exit (what
+  the code does and a test pins), not "goes through" it (what 2Captcha did
+  not do, measured); exit 6 covers a transport fault after rows were
+  gathered.
+* **README:** `--mode seller` reads all of a seller's listings through the
+  feed, and exit 6 there means fewer listings than the profile's counter;
+  `diff_runs`'s "removed" means "not in these pages any more", not
+  "delisted".
+
 ## [1.1.1] — 2026-10-16
 
 > **`AVITO_PROXY` / `--proxy` accept the dashboard's colon form.**

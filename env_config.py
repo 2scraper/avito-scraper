@@ -289,6 +289,32 @@ def apply(args, keys=None, quiet=False):
     return args
 
 
+# Variables that hold a credential, by NAME. Deciding by the value ("does it
+# contain @?") printed the dashboard's host:port:login:password proxy whole,
+# password included, because that form has no "@".
+CREDENTIAL_KEYS = {"TWOCAPTCHA_KEY", "AVITO_CDP_ENDPOINT", "AVITO_PROXY"}
+
+
+def describe(env_name, value):
+    """How `python3 env_config.py` reports one variable: a credential never
+    appears, though a proxy's host and port do — which exit is configured is
+    the useful half and is not the secret."""
+    if value is None:
+        return "not set"
+    if env_name in CREDENTIAL_KEYS or "KEY" in env_name:
+        if env_name == "AVITO_PROXY":
+            try:
+                import proxy_pool
+                url = proxy_pool.normalize_proxy(value)
+                parts = re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://(?:[^@/]*@)?([^/:@]+:\d{1,5})(?:/|$)", url)
+                if parts:
+                    return f"set ({len(value)} chars, hidden; exit {parts.group(1)})"
+            except Exception:  # never let the report itself leak or crash
+                pass
+        return f"set ({len(value)} chars, hidden)"
+    return f"set ({value})"
+
+
 if __name__ == "__main__":
     # `python3 env_config.py` — report what is configured, without printing
     # any secret. Useful as a first step when a key "isn't being picked up".
@@ -296,13 +322,7 @@ if __name__ == "__main__":
     where = load_env()
     print(f".env file:      {where or 'not found (this is fine — env vars still work)'}")
     for env_name, dest in ENV_KEYS.items():
-        value = env_value(env_name)
-        if value is None:
-            state = "not set"
-        elif "KEY" in env_name or "@" in value:
-            state = f"set ({len(value)} chars, hidden)"
-        else:
-            state = f"set ({value})"
+        state = describe(env_name, env_value(env_name))
         print(f"  {env_name:<24} -> --{dest.replace('_', '-'):<16} {state}")
     extras = unknown_keys()
     if extras:

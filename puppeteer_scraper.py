@@ -57,6 +57,17 @@ class PuppeteerDriver:
                 self._browser = self._run(asyncio.wait_for(
                     connect(browserWSEndpoint=self.args.cdp_endpoint),
                     timeout=CDP_CONNECT_TIMEOUT_S))
+            except asyncio.TimeoutError:
+                # pyppeteer never surfaces the service's refusal: a `500
+                # proxy_error` reached the user as a bare TimeoutError after
+                # 30 s (2026-10-20), and only a Playwright connect showed why.
+                raise browser_bridge.BridgeError(
+                    "could not connect over CDP: no answer within %ds. pyppeteer does not "
+                    "report a refusal from the Scraping Browser (profile_locked, proxy_error, "
+                    "401) — it only times out. playwright_scraper.py with the same endpoint "
+                    "prints the reason; on proxy_error, rebuild the endpoint with "
+                    "tools/browser_profile_client.py connection --account-id N "
+                    "--mint-session --write-env." % CDP_CONNECT_TIMEOUT_S) from None
             except Exception as exc:
                 raise browser_bridge.BridgeError(
                     "could not connect over CDP: %s: %s"

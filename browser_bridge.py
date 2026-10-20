@@ -142,9 +142,18 @@ def wait_out_challenge(driver, url: str, budget_ms: int, log=None) -> str:
         driver.sleep(page_flow.CHALLENGE_POLL_MS)
         waited += page_flow.CHALLENGE_POLL_MS
         html = driver.content() or html
-        if P.detect_page_state(html, url=url) not in ("challenge",):
+        state = P.detect_page_state(html, url=url)
+        if state not in ("challenge",):
             if log:
-                log("  firewall proof-of-work cleared after %.0fs" % (waited / 1000.0))
+                # "cleared" only for a page that was recognised: one still
+                # loading is just no longer the challenge (manual test
+                # 2026-10-19 logged "cleared", then "nothing recognisable").
+                if state == "unknown":
+                    log("  firewall proof-of-work page gone after %.0fs — the next "
+                        "page is not recognisable yet" % (waited / 1000.0))
+                else:
+                    log("  firewall proof-of-work cleared after %.0fs (now: %s)"
+                        % (waited / 1000.0, state))
             return html
     if log:
         log("  proof-of-work did not clear within %.0fs" % (budget_ms / 1000.0))
@@ -299,6 +308,35 @@ def _after_submit(driver, url: str, record: Dict[str, Any], facts: Dict[str, Any
 # One page
 # ---------------------------------------------------------------------------
 
+def _through_the_wall(driver, args, url: str, mode: str, html: str, state: str,
+                      status, facts: Dict[str, Any], log=None):
+    """Rungs 0-2 for a page that is a wall now: let a proof-of-work clear,
+    then solve a captcha. Returns (html, state); anything else passes through.
+    `status` is the response's own status when known, None on a later pass."""
+    if state in ("challenge", "captcha"):
+        facts["walls"].append({"url": url, "state": state, "status": status})
+    shown = "HTTP %s" % status if status is not None else "after waiting"
+
+    if state == "challenge":
+        if log:
+            log("  firewall proof-of-work (%s) — letting the browser clear it" % shown)
+        html = wait_out_challenge(driver, url, page_flow.CHALLENGE_SETTLE_MS, log=log)
+        state = P.detect_page_state(html, url=url)
+
+    if state == "captcha":
+        if log:
+            log("  firewall captcha (%s)" % shown)
+        fresh = solve_wall(driver, args, url, html, facts, log=log)
+        if fresh is not None:
+            html = wait_for_content(driver, mode, url, page_flow.content_timeout_ms(mode), log=log)
+            state = P.detect_page_state(html, url=url)
+            if state == "challenge":
+                # A proof-of-work after the solve clears itself like any other.
+                html = wait_out_challenge(driver, url, page_flow.CHALLENGE_SETTLE_MS, log=log)
+                state = P.detect_page_state(html, url=url)
+    return html, state
+
+
 def fetch_page(driver, args, url: str, mode: str, facts: Dict[str, Any], log=None) -> Dict[str, Any]:
     """One page through a browser, with the ladder applied.
 
@@ -325,32 +363,19 @@ def fetch_page(driver, args, url: str, mode: str, facts: Dict[str, Any], log=Non
 
     html = wait_for_content(driver, mode, url, page_flow.content_timeout_ms(mode), log=log)
     state = P.detect_page_state(html, status=status, url=url)
-    if state in ("challenge", "captcha"):
-        facts["walls"].append({"url": url, "state": state, "status": status})
-
-    if state == "challenge":
-        if log:
-            log("  firewall proof-of-work (HTTP %s) — letting the browser clear it" % status)
-        html = wait_out_challenge(driver, url, page_flow.CHALLENGE_SETTLE_MS, log=log)
-        state = P.detect_page_state(html, url=url)
-
-    if state == "captcha":
-        if log:
-            log("  firewall captcha (HTTP %s)" % status)
-        fresh = solve_wall(driver, args, url, html, facts, log=log)
-        if fresh is not None:
-            html = wait_for_content(driver, mode, url, page_flow.content_timeout_ms(mode), log=log)
-            state = P.detect_page_state(html, url=url)
-            if state == "challenge":
-                # A proof-of-work after the solve clears itself like any other.
-                html = wait_out_challenge(driver, url, page_flow.CHALLENGE_SETTLE_MS, log=log)
-                state = P.detect_page_state(html, url=url)
+    html, state = _through_the_wall(driver, args, url, mode, html, state, status, facts, log)
 
     if state == "unknown":
         if log:
             log("  nothing recognisable yet — one more wait")
         html = wait_for_content(driver, mode, url, page_flow.content_timeout_ms(mode), log=log)
         state = P.detect_page_state(html, url=url)
+        # The wall can surface only now: the proof-of-work went, the page in
+        # between was not recognisable, and the captcha arrived during this
+        # wait. Without a second pass it was never solved and the run rotated
+        # to a fresh exit instead (manual test 2026-10-19, twice in three
+        # exits). One more pass, not a loop.
+        html, state = _through_the_wall(driver, args, url, mode, html, state, None, facts, log)
 
     if state == "unknown" and mode == "listing" and P.served_listing_without_cards(html, url):
         # Two full waits and still a served page with no cards: now, and only
@@ -510,9 +535,9 @@ def _check_urls(urls: List[str], mode: str) -> None:
                              "sort or filter parameters." % (u, rule))
         kind = P.page_kind(u)
         if kind != mode:
-            raise UsageError("refusing %s: that is %s page, not a %s page — use "
-                             "--mode %s" % (u, "an item" if kind == "item" else "a " + kind,
-                                            mode, kind))
+            article = lambda k: "an " + k if k == "item" else "a " + k
+            raise UsageError("refusing %s: that is %s page, not %s page — use "
+                             "--mode %s" % (u, article(kind), article(mode), kind))
 
 
 def _validated_urls(args) -> List[str]:
@@ -567,7 +592,7 @@ def run(args, driver) -> int:
     started_at = datetime.now(timezone.utc).isoformat()
 
     try:
-        driver.start()
+        _start_through_profile_lock(driver)
     except Exception as exc:  # noqa: BLE001 — a browser that never started is transport
         print("could not start %s: %s: %s"
               % (driver.name, type(exc).__name__, mask_text(str(exc))[:300]), file=sys.stderr)
@@ -622,11 +647,46 @@ def run(args, driver) -> int:
     )
 
 
+def _start_through_profile_lock(driver) -> None:
+    """driver.start(), retried briefly when the Scraping Browser answers
+    `profile_locked` — and on nothing else (page_flow.PROFILE_LOCKED_*)."""
+    for attempt in range(page_flow.PROFILE_LOCKED_RETRIES + 1):
+        try:
+            driver.start()
+            return
+        except Exception as exc:  # noqa: BLE001
+            if "profile_locked" not in str(exc) or attempt == page_flow.PROFILE_LOCKED_RETRIES:
+                raise
+            print("[i] the browser profile is still held by a previous connection "
+                  "(profile_locked) — retry %d/%d in %ds"
+                  % (attempt + 1, page_flow.PROFILE_LOCKED_RETRIES,
+                     page_flow.PROFILE_LOCKED_RETRY_DELAY_S), file=sys.stderr)
+            _stop(driver)
+            time.sleep(page_flow.PROFILE_LOCKED_RETRY_DELAY_S)
+
+
 def _stop(driver) -> None:
     try:
         driver.stop()
     except Exception as exc:  # noqa: BLE001
         logger.warning("%s did not shut down cleanly: %s", driver.name, mask_text(str(exc)))
+
+
+def _keep_partial(rows, page: int, exc: BaseException, facts: Dict[str, Any]) -> bool:
+    """A transport failure AFTER rows were gathered ends the run as partial
+    (exit 6, the rows written) instead of discarding them as exit 5.
+
+    Live, 2026-10-20: page 1 gave 50 rows over the Scraping Browser, page 2
+    died with ERR_CONNECTION_RESET, and the run reported products 0 and
+    wrote nothing. Returns False when nothing was gathered yet — that is
+    still a run that never obtained content, and the caller re-raises."""
+    if not rows:
+        return False
+    facts["failed_pages"].append(page)
+    facts["transport_error"] = mask_text(str(exc))[:300]
+    print("[!] %s — stopping; keeping the %d row(s) gathered before it"
+          % (mask_text(str(exc))[:200], len(rows)), file=sys.stderr)
+    return True
 
 
 def _run_listing(driver, args, url, facts, seen, log) -> List[Product]:
@@ -639,7 +699,12 @@ def _run_listing(driver, args, url, facts, seen, log) -> List[Product]:
             break
         target = P.page_url(url, page)
         log("page %d: %s" % (page, target))
-        result = fetch_with_rotation(driver, args, target, "listing", facts, log=log)
+        try:
+            result = fetch_with_rotation(driver, args, target, "listing", facts, log=log)
+        except BridgeError as exc:
+            if not _keep_partial(rows, page, exc, facts):
+                raise
+            break
         state = result["state"]
         facts["states"].append(state)
         facts["final_url"] = target
@@ -648,8 +713,10 @@ def _run_listing(driver, args, url, facts, seen, log) -> List[Product]:
         if page_flow.counts_as_blocked(state):
             facts["blocked"] = True
             facts["failed_pages"].append(page)
-            print("page %d: %s (HTTP %s, %d bytes)"
-                  % (page, state, result["status"], len(result["html"])), file=sys.stderr)
+            # The status is the FIRST response's — often the challenge the
+            # browser then got past — not that of the page the run stopped on.
+            print("page %d: %s (%d bytes; first response HTTP %s)"
+                  % (page, state, len(result["html"]), result["status"]), file=sys.stderr)
             break
         if state == "empty":
             log("  page %d is a served listing with no cards on it." % page)
@@ -691,14 +758,20 @@ def _run_items(driver, args, urls, facts, log) -> List[Any]:
             facts["max_products_reached"] = True
             break
         log("item %d/%d: %s" % (i, max(planned, i), url))
-        result = fetch_with_rotation(driver, args, url, "item", facts, log=log)
+        try:
+            result = fetch_with_rotation(driver, args, url, "item", facts, log=log)
+        except BridgeError as exc:
+            if not _keep_partial(rows, i, exc, facts):
+                raise
+            break
         facts["states"].append(result["state"])
         _dump(args, result["html"], i)
         if page_flow.counts_as_blocked(result["state"]):
             facts["blocked"] = True
             facts["failed_pages"].append(i)
-            print("item %d: %s (HTTP %s) — stopping; the remaining items would "
-                  "meet the same wall" % (i, result["state"], result["status"]), file=sys.stderr)
+            print("item %d: %s (first response HTTP %s) — stopping; the remaining "
+                  "items would meet the same wall" % (i, result["state"], result["status"]),
+                  file=sys.stderr)
             break
         item = P.parse_item(result["html"], url=url, category=args.category)
         if item is None:
