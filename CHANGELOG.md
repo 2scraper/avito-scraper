@@ -93,6 +93,10 @@ entry in a blockquote.
   control in which `GeeTestTask` returned solutions for an unreachable
   proxy, and 11 Scraping Browser runs that met no wall (2026-10-19) — and
   says to use the Scraping Browser.
+* **CONTRIBUTING:** a captcha solve is *sent with* the browser's exit (what
+  the code does and a test pins), not "goes through" it (what 2Captcha did
+  not do, measured); exit 6 covers a transport fault after rows were
+  gathered.
 * **README:** `--mode seller` reads all of a seller's listings through the
   feed, and exit 6 there means fewer listings than the profile's counter;
   `diff_runs`'s "removed" means "not in these pages any more", not

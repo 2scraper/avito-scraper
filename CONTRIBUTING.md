@@ -66,14 +66,18 @@ wrong:
   pre-discount figure.
 - **Substitute cards are not results.** A no-match search is served with ~50
   cards under «Похожие объявления…».
-- **A captcha solve goes through the browser's exit.** A token solved from
-  another IP is rejected; the solver refuses to run without the proxy.
+- **A captcha solve is sent with the browser's exit.** A token solved from
+  another IP is rejected, so the solve task carries the browser's own proxy and
+  the solver refuses to run without one. Whether the solver actually uses it
+  is 2Captcha's side — measured, it did not (README, "The one thing you
+  actually need").
 - **The wall is recognised by its `<form>`**, not by the class name, which the
   wall's own script also mentions.
 - **Exit codes are a contract**: `0` ok, `1` crash, `2` bad usage, `3`
   blocked, `4` zero rows from a listing read to its end, `5` content never obtained
-  (transport, or zero rows for any other reason), `6` partial. A transport fault
-  is never `3`.
+  (transport, or zero rows for any other reason), `6` partial — including a
+  transport fault AFTER rows were gathered, which keeps and writes them. A
+  transport fault is never `3`.
 - **A run that finds nothing writes nothing.** `--allow-empty` is the opt-out.
 - **No phone, no IMEI, no private seller's placeholder name** in any row.
 
