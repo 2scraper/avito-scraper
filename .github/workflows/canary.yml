@@ -74,31 +74,7 @@ jobs:
           AVITO_PROXY: ${{ secrets.AVITO_PROXY }}
         run: |
           install -m 600 /dev/null .env
-          python3 - <<'PY2'
-          import base64, os, re, sys
-          from urllib.parse import urlsplit, urlunsplit, quote, unquote
-          sys.path.insert(0, "tools"); sys.path.insert(0, ".")
-          import browser_profile_client as bpc
-          proxy_url = bpc.minted_proxy(60)  # fresh -session-/-sessTime-60 on AVITO_PROXY
-          ep = urlsplit(os.environ["AVITO_CDP_ENDPOINT"].strip())
-          user = unquote(ep.username or "")
-          if not user or "-zone-" not in user:
-              sys.exit("!! AVITO_CDP_ENDPOINT has no Scraping Browser login segment")
-          user = re.sub(r"-proxy-[A-Za-z0-9_=-]+$", "", user)
-          if re.search(r"-country-[a-z]{2}", user):
-              user = re.sub(r"-country-[a-z]{2}", "-country-ru", user)
-          else:
-              user = re.sub(r"(-zone-[a-z_]+)", r"\1-country-ru", user, count=1)
-          enc = base64.urlsafe_b64encode(proxy_url.encode()).decode().rstrip("=")
-          user += "-proxy-" + enc
-          netloc = quote(user, safe="-_.~") + ":" + quote(unquote(ep.password or ""), safe="-_.~") + "@" + ep.hostname + (f":{ep.port}" if ep.port else "")
-          uri = urlunsplit((ep.scheme, netloc, ep.path, ep.query, ep.fragment))
-          with open(".env", "w", encoding="utf-8") as f:
-              f.write("AVITO_CDP_ENDPOINT=" + uri + "\n")
-              f.write("AVITO_PROXY=" + proxy_url + "\n")
-          print("endpoint         :", bpc.mask_url(uri), "(country-ru, custom proxy segment)")
-          print("solver proxy     :", bpc.mask_url(proxy_url), "(same session)")
-          PY2
+          python3 tools/browser_profile_client.py canary-env --session-minutes 60
 
       - name: Build a fresh endpoint and its matching solver proxy
         if: env.HAS_CDP != 'true'
@@ -119,15 +95,36 @@ jobs:
         # AVITO_PROXY is deliberately NOT exported here: an exported variable
         # outranks .env, and the base login would replace the minted session
         # the endpoint was built with.
+        #
+        # Exit 5 (the Scraping Browser refused the connection, or a page load
+        # died on the residential exit) gets ONE retry on a freshly minted
+        # session — measured 2026-10-20: the first run after the secret was
+        # fixed died with ERR_CONNECTION_RESET, the next one passed. A block
+        # (3) or no rows (4) is an answer about the site and is not retried.
         env:
           TWOCAPTCHA_KEY: ${{ secrets.TWOCAPTCHA_KEY }}
+          ACCOUNT_ID: ${{ vars.AVITO_BROWSER_ACCOUNT_ID }}
         run: |
           # GitHub runs `run:` under `bash -e`; capture the exit code first.
           set +e
-          python3 playwright_scraper.py --mode listing \
-            --url https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAkS0wA3OqzmwwQ2I_Dc \
-            --pages 3 --out canary --format both --verbose
-          echo "rc=$?" >> "$GITHUB_ENV"
+          live() {
+            python3 playwright_scraper.py --mode listing \
+              --url https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAkS0wA3OqzmwwQ2I_Dc \
+              --pages 3 --out canary --format both --verbose
+          }
+          live; rc=$?
+          if [ "$rc" = "5" ]; then
+            echo "::warning::the live run exited 5 (connection or page load failed) — one retry on a fresh proxy session"
+            if [ "$HAS_CDP" = "true" ]; then
+              python3 tools/browser_profile_client.py canary-env --session-minutes 60
+            else
+              python3 tools/browser_profile_client.py connection --account-id "$ACCOUNT_ID" \
+                --mint-session --session-minutes 60 --write-env
+            fi
+            sleep 30   # a profile stays locked for a while after a dropped connection
+            live; rc=$?
+          fi
+          echo "rc=$rc" >> "$GITHUB_ENV"
           set -e
 
       - name: Assert the data, not just the exit code

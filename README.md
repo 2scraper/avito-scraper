@@ -62,7 +62,7 @@ implemented from the wall's code and 2Captcha's task format, never met live.
 | … the GeeTest wall, 2Captcha `GeeTestTask` through the **browser's own exit** | **3 of 3** `verified`, 36–73 s, $0.00299 each |
 | … the same, local Chromium | **2 of 3** (one `ERROR_CAPTCHA_UNSOLVABLE`) |
 | … the same, solved **without** the browser's proxy | **0 of 1** — the site answered with a second captcha |
-| … the same, local Chromium, re-measured 2026-10-14 and 2026-10-19 | **0 of 9** `verified` — the site served the captcha again after each |
+| … the same, local Chromium, re-measured 2026-10-14 to 2026-10-20 | **0 of 14** `verified` — the site served the captcha or the wait wall again after each |
 | Scraping Browser API, 11 runs of every mode, 2026-10-19 | **met no wall at all**; no solve was bought |
 | the wall, left unsolved | 0 of 3 cleared on its own within 140 s |
 
@@ -71,7 +71,7 @@ scraper passes the browser's own exit as the task's proxy and refuses to buy
 a solve without one. **But in a control on 2026-10-14 the solver did not use
 that proxy:** `GeeTestTask` returned a solution for a proxy with a wrong
 password and for a proxy host that does not exist. Local-browser solves
-have been refused since (0 of 9 above).
+have been refused since (0 of 14 above).
 That the token comes from another IP is the likeliest reason, not a proven
 one. **Use the Scraping Browser:** once a profile has passed the wall, its
 cookies carry it — a dozen consecutive pages of listings, items and seller
@@ -409,8 +409,8 @@ own venv and builds the Docker image.
   persistent profile, so most pages after the first never meet the wall.
 * **[Captcha solving](https://2captcha.com)** — `TWOCAPTCHA_KEY`. GeeTest v4
   through `GeeTestTask`: 3 of 3 on the Scraping Browser (2026-10-06),
-  $0.00299 each. On a local browser the solutions were refused 0 of 9
-  (2026-10-14 and 10-19) — see [the one thing you actually need](#the-one-thing-you-actually-need).
+  $0.00299 each. On a local browser the solutions were refused 0 of 14
+  (2026-10-14 to 10-20) — see [the one thing you actually need](#the-one-thing-you-actually-need).
   At most one paid solve per page per run.
 * **Fingerprints** — `fingerprint_client.py`. Not used over CDP, where the
   remote browser brings its own.

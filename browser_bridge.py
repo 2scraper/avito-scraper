@@ -592,7 +592,7 @@ def run(args, driver) -> int:
     started_at = datetime.now(timezone.utc).isoformat()
 
     try:
-        driver.start()
+        _start_through_profile_lock(driver)
     except Exception as exc:  # noqa: BLE001 — a browser that never started is transport
         print("could not start %s: %s: %s"
               % (driver.name, type(exc).__name__, mask_text(str(exc))[:300]), file=sys.stderr)
@@ -647,11 +647,46 @@ def run(args, driver) -> int:
     )
 
 
+def _start_through_profile_lock(driver) -> None:
+    """driver.start(), retried briefly when the Scraping Browser answers
+    `profile_locked` — and on nothing else (page_flow.PROFILE_LOCKED_*)."""
+    for attempt in range(page_flow.PROFILE_LOCKED_RETRIES + 1):
+        try:
+            driver.start()
+            return
+        except Exception as exc:  # noqa: BLE001
+            if "profile_locked" not in str(exc) or attempt == page_flow.PROFILE_LOCKED_RETRIES:
+                raise
+            print("[i] the browser profile is still held by a previous connection "
+                  "(profile_locked) — retry %d/%d in %ds"
+                  % (attempt + 1, page_flow.PROFILE_LOCKED_RETRIES,
+                     page_flow.PROFILE_LOCKED_RETRY_DELAY_S), file=sys.stderr)
+            _stop(driver)
+            time.sleep(page_flow.PROFILE_LOCKED_RETRY_DELAY_S)
+
+
 def _stop(driver) -> None:
     try:
         driver.stop()
     except Exception as exc:  # noqa: BLE001
         logger.warning("%s did not shut down cleanly: %s", driver.name, mask_text(str(exc)))
+
+
+def _keep_partial(rows, page: int, exc: BaseException, facts: Dict[str, Any]) -> bool:
+    """A transport failure AFTER rows were gathered ends the run as partial
+    (exit 6, the rows written) instead of discarding them as exit 5.
+
+    Live, 2026-10-20: page 1 gave 50 rows over the Scraping Browser, page 2
+    died with ERR_CONNECTION_RESET, and the run reported products 0 and
+    wrote nothing. Returns False when nothing was gathered yet — that is
+    still a run that never obtained content, and the caller re-raises."""
+    if not rows:
+        return False
+    facts["failed_pages"].append(page)
+    facts["transport_error"] = mask_text(str(exc))[:300]
+    print("[!] %s — stopping; keeping the %d row(s) gathered before it"
+          % (mask_text(str(exc))[:200], len(rows)), file=sys.stderr)
+    return True
 
 
 def _run_listing(driver, args, url, facts, seen, log) -> List[Product]:
@@ -664,7 +699,12 @@ def _run_listing(driver, args, url, facts, seen, log) -> List[Product]:
             break
         target = P.page_url(url, page)
         log("page %d: %s" % (page, target))
-        result = fetch_with_rotation(driver, args, target, "listing", facts, log=log)
+        try:
+            result = fetch_with_rotation(driver, args, target, "listing", facts, log=log)
+        except BridgeError as exc:
+            if not _keep_partial(rows, page, exc, facts):
+                raise
+            break
         state = result["state"]
         facts["states"].append(state)
         facts["final_url"] = target
@@ -718,7 +758,12 @@ def _run_items(driver, args, urls, facts, log) -> List[Any]:
             facts["max_products_reached"] = True
             break
         log("item %d/%d: %s" % (i, max(planned, i), url))
-        result = fetch_with_rotation(driver, args, url, "item", facts, log=log)
+        try:
+            result = fetch_with_rotation(driver, args, url, "item", facts, log=log)
+        except BridgeError as exc:
+            if not _keep_partial(rows, i, exc, facts):
+                raise
+            break
         facts["states"].append(result["state"])
         _dump(args, result["html"], i)
         if page_flow.counts_as_blocked(result["state"]):

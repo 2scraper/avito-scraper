@@ -280,6 +280,54 @@ def minted_proxy(minutes: int) -> str:
         sys.exit(f"!! {exc}")
 
 
+def repoint_endpoint(given: str, proxy_url: str) -> str:
+    """`given` Scraping Browser endpoint, re-pointed at a Russian exit:
+    `-country-ru`, and the custom proxy as the LAST login segment,
+    `-proxy-<base64url of proxy_url>` (Browser API docs: base64url, after
+    `-pid-`). An existing `-proxy-` segment is replaced, never stacked, so a
+    retry can re-point an endpoint it re-pointed before.
+
+    It used to be 30 lines of Python inside canary.yml, which nothing could
+    run or test outside a GitHub runner."""
+    import base64
+    from urllib.parse import quote, unquote, urlsplit, urlunsplit
+    ep = urlsplit(given.strip())
+    user = unquote(ep.username or "")
+    if not user or "-zone-" not in user:
+        raise ValueError("the endpoint has no Scraping Browser login segment")
+    user = re.sub(r"-proxy-[A-Za-z0-9_=-]+$", "", user)
+    if re.search(r"-country-[a-z]{2}", user):
+        user = re.sub(r"-country-[a-z]{2}", "-country-ru", user)
+    else:
+        user = re.sub(r"(-zone-[a-z_]+)", r"\1-country-ru", user, count=1)
+    user += "-proxy-" + base64.urlsafe_b64encode(proxy_url.encode()).decode().rstrip("=")
+    netloc = (quote(user, safe="-_.~") + ":" + quote(unquote(ep.password or ""), safe="-_.~")
+              + "@" + (ep.hostname or "") + (f":{ep.port}" if ep.port else ""))
+    return urlunsplit((ep.scheme, netloc, ep.path, ep.query, ep.fragment))
+
+
+def cmd_canary_env(args, key):
+    """Re-point the endpoint (AVITO_CDP_ENDPOINT, from the environment or
+    .env) at a session freshly minted on AVITO_PROXY, and write BOTH into
+    .env — the solver must leave from the browser's exit. Run again, it mints
+    a NEW session: that is the canary's retry after a dropped run."""
+    env_config.load_env(ENV)
+    given = env_config.env_value(VAR)
+    if not given:
+        sys.exit(f"!! {VAR} is not set (environment or .env)")
+    proxy_url = minted_proxy(args.session_minutes)
+    try:
+        uri = repoint_endpoint(given, proxy_url)
+    except ValueError as exc:
+        sys.exit(f"!! {VAR}: {exc}")
+    if not ENV.is_file():
+        ENV.touch(mode=0o600)
+    write_env(uri)
+    write_env(proxy_url, "AVITO_PROXY")
+    print(f"endpoint         : {mask_url(uri)} (country-ru, custom proxy segment)")
+    print(f"solver proxy     : {mask_url(proxy_url)} (same session)")
+
+
 def dicts_in(obj):
     """Every dict anywhere in a JSON shape, so a table can be built without
     knowing which key the list hides under."""
@@ -504,8 +552,16 @@ def main() -> int:
                    help="ask for a URI without a custom proxy, as a control")
     c.add_argument("--write-env", action="store_true",
                    help=f"write the URI into .env as {VAR}")
+    ce = sub.add_parser("canary-env",
+                        help="re-point AVITO_CDP_ENDPOINT at a fresh session of AVITO_PROXY "
+                             "(-country-ru, -proxy-<base64url>) and write both into .env")
+    ce.add_argument("--session-minutes", type=int, default=60,
+                    help="-sessTime- for the minted session (default 60)")
     args = ap.parse_args()
 
+    if args.cmd == "canary-env":
+        # No API call, so no key needed: the canary runs this without one.
+        return cmd_canary_env(args, None) or 0
     key = api_key()
     return {
         "accounts": cmd_accounts,

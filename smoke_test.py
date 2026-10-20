@@ -1638,6 +1638,37 @@ def test_selenium_keeps_the_credential_off_argv():
         selenium_scraper.webdriver.Chrome = real
 
 
+def test_pyppeteer_connect_timeout_says_what_it_may_hide():
+    """pyppeteer never surfaces the Scraping Browser's refusal: on 2026-10-20
+    a `500 proxy_error` reached the user as a bare 'TimeoutError: ' after 30 s,
+    and only a Playwright connect showed the reason. The message now says so."""
+    try:
+        import puppeteer_scraper
+    except ImportError:
+        skip("pyppeteer guards (engine absent)")
+        return
+    import asyncio
+    import browser_bridge
+
+    async def never(**kw):
+        await asyncio.sleep(3600)
+    real_connect, real_timeout = puppeteer_scraper.connect, puppeteer_scraper.CDP_CONNECT_TIMEOUT_S
+    puppeteer_scraper.connect, puppeteer_scraper.CDP_CONNECT_TIMEOUT_S = never, 0.05
+    try:
+        d = puppeteer_scraper.PuppeteerDriver(_args(cdp_endpoint="ws://" + "u:p" + "@cb.2captcha.com:9222"))
+        try:
+            d.start()
+            check("a silent endpoint raises", False)
+        except browser_bridge.BridgeError as exc:
+            msg = str(exc)
+            for word in ("profile_locked", "proxy_error", "playwright_scraper.py", "--mint-session"):
+                check("pyppeteer timeout message names %s" % word, word in msg, "(got %r)" % msg)
+        finally:
+            d.stop()
+    finally:
+        puppeteer_scraper.connect, puppeteer_scraper.CDP_CONNECT_TIMEOUT_S = real_connect, real_timeout
+
+
 def test_pyppeteer_keeps_the_credential_off_argv():
     try:
         import puppeteer_scraper
@@ -2301,6 +2332,81 @@ def test_a_captcha_after_the_proof_of_work_is_solved_on_the_same_exit():
     eq("and the page came back", rc, 0)
 
 
+def test_profile_locked_at_connect_is_retried_and_nothing_else_is():
+    """A run started right after another on the same Scraping Browser profile
+    got `500 profile_locked` and exited 5; 30 s later the same step passed
+    (manual test 2026-10-20, steps 17 and 24). Retry THAT answer briefly, and
+    only that: a timeout or proxy_error is not a lock and must not be
+    retried into a held profile."""
+    import browser_bridge
+    import page_flow
+
+    class Locked(FakeDriver):
+        def __init__(self, failures, message):
+            super().__init__([fixture("listing_dom.html")])
+            self.failures, self.message = failures, message
+
+        def start(self):
+            self.starts += 1
+            if self.failures:
+                self.failures -= 1
+                raise RuntimeError(self.message)
+
+    saved = page_flow.PROFILE_LOCKED_RETRY_DELAY_S if hasattr(page_flow, "PROFILE_LOCKED_RETRY_DELAY_S") else None
+    page_flow.PROFILE_LOCKED_RETRY_DELAY_S = 0
+    locked = ("BrowserType.connect_over_cdp: WebSocket error: ws://***:***@cb.2captcha.com:9222/ "
+              "500 Internal Server Error\nprofile_locked\n")
+    proxy = locked.replace("profile_locked", "proxy_error")
+    try:
+        for name, failures, message, want_rc, want_starts in (
+                ("locked twice, then free", 2, locked, 0, 3),
+                ("locked for good", 99, locked, 5, 1 + page_flow.PROFILE_LOCKED_RETRIES),
+                ("proxy_error is not retried", 1, proxy, 5, 1),
+                ("a timeout is not retried", 1, "TimeoutError: connect timed out", 5, 1)):
+            d = Locked(failures, message)
+            with tempfile.TemporaryDirectory() as tmp:
+                rc = _quiet(browser_bridge.run, _args(out=os.path.join(tmp, "o")), d)
+            eq("%s: exit" % name, rc, want_rc)
+            eq("%s: connection attempts" % name, d.starts, want_starts)
+    finally:
+        if saved is not None:
+            page_flow.PROFILE_LOCKED_RETRY_DELAY_S = saved
+
+
+def test_a_dropped_connection_after_collected_pages_keeps_them():
+    """Live, 2026-10-20 (pyppeteer over the Scraping Browser): page 1 gave 50
+    rows, page 2 died with ERR_CONNECTION_RESET/CLOSED — and the run exited 5
+    with products 0 and no file, throwing the 50 rows away. Rows gathered and
+    THEN a failure is a partial run: exit 6, the rows written. A failure before
+    any row is still 5."""
+    import browser_bridge
+    reset = RuntimeError("Page.goto: net::ERR_CONNECTION_RESET at " + LISTING)
+    cases = (
+        ("listing, drop on page 2", dict(url=[LISTING], pages=3), [fixture("listing_dom.html"), reset], 6, 2),
+        ("items, drop on item 2", dict(mode="item", url=[ITEM_COMPANY, ITEM_PRIVATE]),
+         [fixture("item_company.html"), reset], 6, 2),
+        ("listing, drop on page 1", dict(url=[LISTING], pages=3), [reset], 5, 1),
+    )
+    for name, kw, pages, want, failed_at in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            args = _args(out=os.path.join(tmp, "o"), **kw)
+            rc = _quiet(browser_bridge.run, args, FakeDriver(pages))
+            meta = json.load(open(os.path.join(tmp, "o.latest_attempt.meta.json")))
+            eq("%s: exit code" % name, rc, want)
+            eq("%s: sidecar exit_code" % name, meta.get("exit_code"), want)
+            if want == 6:
+                rows = json.load(open(os.path.join(tmp, "o.json")))
+                check("%s: the gathered rows are written" % name, len(rows) >= 1, "(%d rows)" % len(rows))
+                eq("%s: sidecar products" % name, meta.get("products"), len(rows))
+                eq("%s: status" % name, meta.get("status"), "partial")
+                check("%s: the failed page is named" % name,
+                      failed_at in (meta.get("pages_failed") or []), "(%s)" % meta.get("pages_failed"))
+                check("%s: the transport error is kept" % name,
+                      "ERR_CONNECTION_RESET" in json.dumps(meta.get("transport_facts")))
+            else:
+                check("%s: nothing written" % name, not os.path.exists(os.path.join(tmp, "o.json")))
+
+
 def test_canary_cannot_go_green_without_scraping():
     """The canary took a green SKIP branch every day for a week: a badge that
     said nothing about the site. Missing credentials and a non-zero live run
@@ -2322,6 +2428,59 @@ def test_canary_cannot_go_green_without_scraping():
     check("the run check requires sku/url/title on every row",
           '("sku", "url", "title")' in checks)
     check("and no longer a seller-name share", "rows name a seller" not in checks)
+
+
+def test_canary_endpoint_lives_in_a_tool_and_a_dropped_run_is_retried_once():
+    """canary.yml carried 30 lines of Python in a heredoc — nothing could run
+    or test it locally (a family rule: workflows call shipped code). It is
+    `browser_profile_client.py canary-env` now. And a run that exits 5 (the
+    Scraping Browser refused, or a page load died — 2026-10-20, first run
+    after the secret was fixed) gets ONE retry on a fresh proxy session; a
+    block (3) or no rows (4) does not."""
+    import importlib.util
+    import base64 as b64
+    spec = importlib.util.spec_from_file_location(
+        "_bpc_canary", os.path.join(HERE, "tools", "browser_profile_client.py"))
+    bpc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bpc)
+    given = ("ws://bc" + "1234-zo" + "ne-scraping_browser-country-us-pid-pabc" + ":" + "EXAMPLEPW"
+             + "@cb.2captcha.com:9222")
+    proxy1 = "http://" + "u1234-zone-custom-region-RU-session-AAAAAAAAA-sessTime-60:EXAMPLEPW" \
+             + "@eu.proxy.rucaptcha.com:2334"
+    proxy2 = proxy1.replace("AAAAAAAAA", "BBBBBBBBB")
+    uri = bpc.repoint_endpoint(given, proxy1)
+    from urllib.parse import urlsplit, unquote
+    user = unquote(urlsplit(uri).username)
+    check("repoint: country forced to ru", "-country-ru-" in user and "-country-us" not in user, user)
+    enc = user.split("-proxy-", 1)[1]
+    eq("repoint: -proxy- is base64url of the minted proxy",
+       b64.urlsafe_b64decode(enc + "=" * (-len(enc) % 4)).decode(), proxy1)
+    check("repoint: password and host kept", urlsplit(uri).password == "EXAMPLEPW"
+          and urlsplit(uri).hostname == "cb.2captcha.com" and urlsplit(uri).port == 9222)
+    again = unquote(urlsplit(bpc.repoint_endpoint(uri, proxy2)).username)
+    eq("repoint: re-pointing replaces the proxy segment, never stacks it", again.count("-proxy-"), 1)
+    check("repoint: and carries the NEW session", "BBBBBBBBB" in b64.urlsafe_b64decode(
+        again.split("-proxy-", 1)[1] + "==").decode())
+    bare = bpc.repoint_endpoint(given.replace("-country-us", ""), proxy1)
+    check("repoint: a login without -country- gets one after the zone",
+          "-zo" "ne-scraping_browser-country-ru-" in unquote(urlsplit(bare).username))
+    try:
+        bpc.repoint_endpoint("ws://" + "nologin:pw" + "@cb.2captcha.com:9222", proxy1)
+        check("repoint: a login without -zone- is refused", False)
+    except ValueError:
+        check("repoint: a login without -zone- is refused", True)
+
+    path = os.path.join(HERE, ".github", "workflows", "canary.yml")
+    if not os.path.isdir(os.path.join(HERE, ".github")):
+        skip("canary shape (.github absent)")
+        return
+    body = open(path, encoding="utf-8").read()
+    check("canary.yml has no inline Python heredoc", "python3 - <<" not in body)
+    check("canary.yml re-points the endpoint with the shipped tool",
+          "browser_profile_client.py canary-env" in body)
+    check("a live run that exits 5 is retried once", 'if [ "$rc" = "5" ]' in body)
+    check("nothing else is retried", 'if [ "$rc" != "0" ]; then' not in body.split("name: Live run")[1]
+          .split("name: Assert")[0])
 
 
 def test_the_canary_run_check_passes_a_good_run():

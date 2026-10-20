@@ -37,6 +37,23 @@ entry in a blockquote.
   run's stop line quoted the first response's status as if it were the
   final page's. The log now says when the next page is not recognisable
   yet, and the stop line labels the status "first response".
+* **A dropped connection after gathered pages threw the pages away.** Page 1
+  gave 50 rows over the Scraping Browser, page 2 died with
+  `ERR_CONNECTION_RESET`, and the run exited 5 with `products: 0` and no file
+  (2026-10-20). Rows gathered and then a transport failure is now a partial
+  run: exit 6, the rows written, the failed page named. A failure before any
+  row is still exit 5.
+* **`profile_locked` right after another run exited 5.** A run started just
+  after another on the same Scraping Browser profile was refused; 30 s later
+  it passed. That one answer is now retried 3 times, 10 s apart
+  (`page_flow.PROFILE_LOCKED_*`); a timeout or `proxy_error` is not.
+* **pyppeteer reported a Scraping Browser refusal as a bare `TimeoutError`.**
+  It never surfaces the service's answer; the message now says so, names the
+  likely causes and points to Playwright for the reason.
+* **The canary died on one dropped run.** Its endpoint step is the shipped
+  `tools/browser_profile_client.py canary-env` instead of 30 lines of Python
+  inside the workflow, and a live run that exits 5 is retried once on a
+  freshly minted session (a block or no rows is not retried).
 * **A captcha that appeared after the proof-of-work was never solved.** When
   the proof-of-work went, the page in between was not recognisable, and the
   captcha arrived during the next wait, the solve rung had already been
@@ -61,7 +78,7 @@ entry in a blockquote.
 ### Changed
 
 * **README, GeeTest:** the "3 of 3 verified" table now carries the later
-  measurements — local-browser solves refused 0 of 9 (2026-10-14, 10-19), a
+  measurements — local-browser solves refused 0 of 14 (2026-10-14 to 10-20), a
   control in which `GeeTestTask` returned solutions for an unreachable
   proxy, and 11 Scraping Browser runs that met no wall (2026-10-19) — and
   says to use the Scraping Browser.

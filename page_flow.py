@@ -60,6 +60,14 @@ AUTOSOLVE_BUDGET_MS = 25000
 # browser's own auto-solve over the Scraping Browser is not counted.
 SOLVES_PER_PAGE = 1
 
+# A Scraping Browser profile answers `500 profile_locked` for a while after
+# the previous connection to it closed: measured on avito 2026-10-20, a run
+# started 0.5 s after another failed, and the same step 30 s later passed
+# (twice). Retried ONLY on that explicit answer — a timeout or proxy_error is
+# not a lock, and a retry that runs into a timeout holds the profile longer.
+PROFILE_LOCKED_RETRIES = 3
+PROFILE_LOCKED_RETRY_DELAY_S = 10
+
 # Readiness anchors per mode — what "the page has painted" means.
 # A listing is ready when MORE than one card is present: one match can
 # resolve on an unrelated card-shaped node long before the grid paints
