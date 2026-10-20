@@ -8,11 +8,22 @@ entry in a blockquote.
 
 ## [Unreleased]
 
+## [1.1.2] — 2026-10-20
+
 > **`python3 env_config.py` printed the dashboard-form proxy whole.** With
 > `AVITO_PROXY` written as `host:port:login:password` — the form 1.1.1 began
 > accepting — the report that promises "without printing secrets" printed
 > the login and password. If you ran it with that form and shared the
 > output, change the proxy password. Found in a manual test, 2026-10-19.
+>
+> **What changes for a scheduler or a script.** A run that gathered rows and
+> then lost its connection now exits **6** with those rows written (it was
+> **5** with nothing written). `<out>.latest_attempt.meta.json` now carries
+> `exit_code` on every ending (it was null except on a transport failure).
+> `diff_runs.py` refuses two runs capped differently by `--max-products`
+> (exit 2). `tools/browser_profile_client.py accounts` prints one row per
+> account with an `account id` column instead of every object with an id. A
+> connect answered `profile_locked` is retried for up to 30 s before exit 5.
 
 ### Fixed
 
