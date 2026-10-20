@@ -308,6 +308,35 @@ def _after_submit(driver, url: str, record: Dict[str, Any], facts: Dict[str, Any
 # One page
 # ---------------------------------------------------------------------------
 
+def _through_the_wall(driver, args, url: str, mode: str, html: str, state: str,
+                      status, facts: Dict[str, Any], log=None):
+    """Rungs 0-2 for a page that is a wall now: let a proof-of-work clear,
+    then solve a captcha. Returns (html, state); anything else passes through.
+    `status` is the response's own status when known, None on a later pass."""
+    if state in ("challenge", "captcha"):
+        facts["walls"].append({"url": url, "state": state, "status": status})
+    shown = "HTTP %s" % status if status is not None else "after waiting"
+
+    if state == "challenge":
+        if log:
+            log("  firewall proof-of-work (%s) — letting the browser clear it" % shown)
+        html = wait_out_challenge(driver, url, page_flow.CHALLENGE_SETTLE_MS, log=log)
+        state = P.detect_page_state(html, url=url)
+
+    if state == "captcha":
+        if log:
+            log("  firewall captcha (%s)" % shown)
+        fresh = solve_wall(driver, args, url, html, facts, log=log)
+        if fresh is not None:
+            html = wait_for_content(driver, mode, url, page_flow.content_timeout_ms(mode), log=log)
+            state = P.detect_page_state(html, url=url)
+            if state == "challenge":
+                # A proof-of-work after the solve clears itself like any other.
+                html = wait_out_challenge(driver, url, page_flow.CHALLENGE_SETTLE_MS, log=log)
+                state = P.detect_page_state(html, url=url)
+    return html, state
+
+
 def fetch_page(driver, args, url: str, mode: str, facts: Dict[str, Any], log=None) -> Dict[str, Any]:
     """One page through a browser, with the ladder applied.
 
@@ -334,32 +363,19 @@ def fetch_page(driver, args, url: str, mode: str, facts: Dict[str, Any], log=Non
 
     html = wait_for_content(driver, mode, url, page_flow.content_timeout_ms(mode), log=log)
     state = P.detect_page_state(html, status=status, url=url)
-    if state in ("challenge", "captcha"):
-        facts["walls"].append({"url": url, "state": state, "status": status})
-
-    if state == "challenge":
-        if log:
-            log("  firewall proof-of-work (HTTP %s) — letting the browser clear it" % status)
-        html = wait_out_challenge(driver, url, page_flow.CHALLENGE_SETTLE_MS, log=log)
-        state = P.detect_page_state(html, url=url)
-
-    if state == "captcha":
-        if log:
-            log("  firewall captcha (HTTP %s)" % status)
-        fresh = solve_wall(driver, args, url, html, facts, log=log)
-        if fresh is not None:
-            html = wait_for_content(driver, mode, url, page_flow.content_timeout_ms(mode), log=log)
-            state = P.detect_page_state(html, url=url)
-            if state == "challenge":
-                # A proof-of-work after the solve clears itself like any other.
-                html = wait_out_challenge(driver, url, page_flow.CHALLENGE_SETTLE_MS, log=log)
-                state = P.detect_page_state(html, url=url)
+    html, state = _through_the_wall(driver, args, url, mode, html, state, status, facts, log)
 
     if state == "unknown":
         if log:
             log("  nothing recognisable yet — one more wait")
         html = wait_for_content(driver, mode, url, page_flow.content_timeout_ms(mode), log=log)
         state = P.detect_page_state(html, url=url)
+        # The wall can surface only now: the proof-of-work went, the page in
+        # between was not recognisable, and the captcha arrived during this
+        # wait. Without a second pass it was never solved and the run rotated
+        # to a fresh exit instead (manual test 2026-10-19, twice in three
+        # exits). One more pass, not a loop.
+        html, state = _through_the_wall(driver, args, url, mode, html, state, None, facts, log)
 
     if state == "unknown" and mode == "listing" and P.served_listing_without_cards(html, url):
         # Two full waits and still a served page with no cards: now, and only

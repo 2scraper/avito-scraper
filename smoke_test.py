@@ -1949,6 +1949,41 @@ def test_diff_runs_refuses_a_capped_run_against_a_full_one():
               _quiet(diff_runs._check_comparable, args) is True)
 
 
+def test_diff_runs_refusal_advice_fits_the_reason():
+    """A refusal over --max-products told the reader to "re-run the
+    incomplete side" when both runs were complete (manual test 2026-10-19,
+    step 50). The advice follows the reason now."""
+    import diff_runs
+    import output_writer as O
+    with tempfile.TemporaryDirectory() as tmp:
+        old, new = os.path.join(tmp, "old.json"), os.path.join(tmp, "new.json")
+        for p in (old, new):
+            open(p, "w").write("[]")
+        args = argparse.Namespace(old=old, new=new)
+
+        def sidecar(path, cap, status="complete"):
+            scope = {"listing": LISTING, "pages": 3, "max_products": cap,
+                     "schema_version": O.schema_version(O.Product)}
+            open(path[:-5] + ".meta.json", "w").write(json.dumps(
+                {"status": status, "mode": "listing", "pages_completed": 3,
+                 "pages_requested": 3, "scope": scope}))
+
+        def said():
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+                diff_runs._check_comparable(args)
+            return out.getvalue()
+
+        sidecar(old, None)
+        sidecar(new, 20)
+        text = said()
+        check("cap refusal advises the same --max-products", "same --max-products" in text, text)
+        check("cap refusal does not blame an incomplete side", "incomplete side" not in text, text)
+        sidecar(new, None, status="partial")
+        text = said()
+        check("partial refusal still advises re-running it", "incomplete side" in text, text)
+
+
 def test_schema_version_is_per_mode():
     """P2-1: the fingerprint covered Product's field names only."""
     import output_writer as O
@@ -2218,6 +2253,52 @@ def test_paid_solves_are_capped_per_page_across_rotations():
     check("another page has its own allowance",
           browser_bridge._spend_solve(f, LISTING) and browser_bridge._spend_solve(f, LISTING + "?p=2"))
     check("and the same page does not get a second one", not browser_bridge._spend_solve(f, LISTING))
+
+
+def test_a_captcha_after_the_proof_of_work_is_solved_on_the_same_exit():
+    """Manual test 2026-10-19, step 42: the proof-of-work went, the next page
+    was not recognisable yet, one more wait showed the captcha — and the run
+    rotated to a fresh exit without solving it, because the solve rung sits
+    before that wait. Twice out of three exits."""
+    import browser_bridge
+    import captcha_solver
+    wall = fixture("wall_captcha.html")
+    challenge = re.sub(r'<form[^>]*js-firewall-form.*?</form>', "", wall, flags=re.S)
+    loading = "<html><head><title>avito</title></head><body></body></html>"
+
+    class Unfolding(FakeDriver):
+        """Each wait shows the next document: challenge -> loading -> captcha."""
+        def __init__(self):
+            super().__init__([challenge], after_js=fixture("listing_dom.html"))
+            self.timeline = [loading, wall]
+
+        def sleep(self, ms):
+            if self.timeline and self.current in (challenge, loading):
+                self.current = self.timeline.pop(0)
+
+    real = captcha_solver.solve_geetest_v4
+    calls = []
+
+    def fake_solve(key, cid, url, proxy=None, **kw):
+        calls.append(proxy)
+        return {"captcha_id": cid, "lot_number": "l", "pass_token": "p", "gen_time": "1",
+                "captcha_output": "o", "_cost": "0.00299"}
+    captcha_solver.solve_geetest_v4 = fake_solve
+    try:
+        args = _args(url=[LISTING + "?p=2"],
+                     proxy=GATEWAY_PROXY.replace("region-RU", "region-RU-session-abcdefghi"),
+                     twocaptcha_key="k")
+        args.solver_proxy = args.proxy
+        with tempfile.TemporaryDirectory() as tmp:
+            args.out = os.path.join(tmp, "o")
+            rc = _quiet(browser_bridge.run, args, Unfolding())
+            facts = json.load(open(os.path.join(tmp, "o.latest_attempt.meta.json")))[
+                "transport_facts"]
+    finally:
+        captcha_solver.solve_geetest_v4 = real
+    eq("the late captcha was solved on the same exit", len(calls), 1)
+    eq("no rotation for it", facts.get("rotations", 0), 0)
+    eq("and the page came back", rc, 0)
 
 
 def test_canary_cannot_go_green_without_scraping():

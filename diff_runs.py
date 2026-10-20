@@ -166,6 +166,7 @@ def _check_comparable(args) -> bool:
     different modes, or that fetched different listings.
     """
     problems = []
+    advice = []   # what to do about each reason, in order, without repeats
     modes = {}
     listings = {}
     schemas = {}
@@ -179,6 +180,7 @@ def _check_comparable(args) -> bool:
             problems.append(
                 f"{label} ({path}) has no readable .meta.json beside it, so "
                 f"nothing shows it was complete or what it covered.")
+            advice.append("keep each run's .meta.json beside its .json")
             continue
         scope = (meta or {}).get("scope") or {}
         schemas[label] = scope.get("schema_version")
@@ -198,37 +200,45 @@ def _check_comparable(args) -> bool:
             problems.append(
                 f"{label} ({path}) is a {mode!r} run, which this tool does "
                 f"not know how to diff.")
+            advice.append("diff listing or item runs only")
         if status != "complete":
             problems.append(
                 f"{label} ({path}) was a {status!r} run — stopped after "
                 f"{meta.get('pages_completed')} of {meta.get('pages_requested')} "
                 f"page(s), reason {meta.get('stop_reason')!r}")
+            advice.append("re-run the incomplete side")
     if len(set(modes.values())) > 1:
         problems.append(
             f"the two runs are different modes ({modes}): a listing row and "
             f"an item row carry different fields, so added/removed would "
             f"describe the mode change rather than the data.")
+        advice.append("compare two runs of the same --mode")
     if len(set(listings.values())) > 1 and "listing" in modes.values():
         problems.append(
             f"the two runs covered different listings or page counts ({listings}): "
             f"rows outside the overlap would read as added or removed.")
+        advice.append("run both on the same listing URL with the same --pages")
     if len(set(caps.values())) > 1:
         problems.append(
             f"the two runs were capped differently by --max-products ({caps}): "
             f"rows the capped run never fetched would read as removed.")
+        advice.append("run both with the same --max-products (or none)")
     if len(set(schemas.values())) > 1:
         problems.append(
             f"the two runs were written by different row schemas ({schemas}): "
             f"a renamed or retyped column would read as a change on every row.")
+        advice.append("re-run the older side with this version")
     if not problems:
         return True
 
     print("[!] Refusing to diff these two runs:")
     for line in problems:
         print(f"      {line}")
-    print("    Re-run the incomplete side, or pass --force to compare "
-          "anyway (added/removed will include rows that were simply never "
-          "fetched).")
+    # The advice follows the reasons: "re-run the incomplete side" was printed
+    # for every refusal, including two complete runs capped differently.
+    steps = list(dict.fromkeys(advice))
+    print("    To compare: %s. Or pass --force to compare anyway (added/removed "
+          "will include rows outside what both runs covered)." % "; ".join(steps))
     return False
 
 

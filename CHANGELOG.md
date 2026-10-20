@@ -37,6 +37,15 @@ entry in a blockquote.
   run's stop line quoted the first response's status as if it were the
   final page's. The log now says when the next page is not recognisable
   yet, and the stop line labels the status "first response".
+* **A captcha that appeared after the proof-of-work was never solved.** When
+  the proof-of-work went, the page in between was not recognisable, and the
+  captcha arrived during the next wait, the solve rung had already been
+  passed: the run rotated to a fresh exit instead (twice in three exits,
+  manual test 2026-10-19). The wall rungs now run once more after that wait.
+* **`diff_runs.py`'s refusal advised "re-run the incomplete side" for every
+  reason**, including two complete runs capped differently. The advice now
+  follows each reason (same `--max-products`, same listing and `--pages`,
+  same `--mode`, …).
 * **Wording:** "not a item page" → "not an item page"; the hint for a proxy
   without a login names both gateway hosts (`.proxy.2captcha.com` and
   `.proxy.rucaptcha.com`), not only the first.
