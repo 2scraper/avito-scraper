@@ -1,4 +1,6 @@
-# avito-scraper
+# Avito Scraper — Russian Classifieds Listings and Sellers in Python
+
+**Avito scraper** — an open-source (MIT) Python tool that reads avito.ru category and search listings, item pages and seller profiles, and writes prices (with the old price and discount where the site states them), location, condition, item parameters and the seller's rating to JSON or CSV. avito.ru sits behind its own firewall: measured from 2026-10-06 through a Russian residential exit, a plain HTTP client was refused 6 of 6 times, and a real browser on a Russian exit was needed — more often than not with a captcha solve. Use it to build a dataset of Russian classifieds, or to compare two runs of the same search.
 
 Scrapes avito.ru — category and search listings, item pages and seller
 profiles. Prices (the price the buyer sees, with the old price and discount
@@ -418,6 +420,24 @@ own venv and builds the Docker image.
   remote browser brings its own.
 
 ---
+
+## Guides
+
+- [How to scrape Avito: step-by-step guide](https://2captcha.com/h/how-to-scrape-avito)
+- [How to run the 2scraper scrapers: setup, proxies, exit codes and access modes](https://2captcha.com/h/how-to-run-2scraper-open-source-scrapers) — installation, `.env`, `.meta.json` for the whole family.
+
+## Related scrapers
+
+Same CLI conventions, same output contract (one row per item, JSON or CSV, a `.meta.json` sidecar and shared exit codes):
+
+- [Craigslist scraper](https://github.com/2scraper/craigslist-scraper) — Craigslist result lists and adverts from all 714 areas
+- [dubizzle scraper](https://github.com/2scraper/dubizzle-scraper) — UAE classifieds — motors, property, electronics, jobs…
+- [Facebook Marketplace scraper](https://github.com/2scraper/facebook-marketplace-scraper) — Marketplace listings by keyword, category, location…
+- [MakeMyTrip scraper](https://github.com/2scraper/makemytrip-scraper) — Hotel prices with taxes and fees, ratings, stars…
+- [Skyscanner scraper](https://github.com/2scraper/skyscanner-scraper) — Route and dates in — every itinerary with price, airline…
+- [Spinny scraper](https://github.com/2scraper/spinny-scraper) — Spinny used-car listings and car detail pages
+
+All scrapers: [github.com/2scraper](https://github.com/2scraper) · Need another site? [Open a request](https://github.com/2scraper/.github/issues/new?title=%5BScraper%20request%5D%20)
 
 ## Contributing, security, licence
 
