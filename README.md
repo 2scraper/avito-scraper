@@ -21,7 +21,7 @@ actually needs.
 [![needs a Russian exit](https://img.shields.io/badge/needs-a%20Russian%20exit%20%2B%20a%20browser-orange)](#the-one-thing-you-actually-need)
 
 > **What the canary badge means.** The canary runs once a day (cron
-> `23 5 * * *`, UTC; GitHub may start it later) and scrapes three pages of
+> `23 2 * * *`, UTC; GitHub may start it later) and scrapes three pages of
 > avito.ru through the Scraping Browser API on a Russian exit. It is green only
 > when that run is complete and its rows pass the data checks. It needs the
 > secrets `TWOCAPTCHA_KEY` and `AVITO_PROXY`, plus either the secret

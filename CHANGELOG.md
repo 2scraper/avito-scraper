@@ -8,6 +8,10 @@ entry in a blockquote.
 
 ## [Unreleased]
 
+### Changed
+
+- CI only: the scheduled canary now starts at 02:23 UTC (daily) instead of 05:23, so canaries that share one Scraping Browser profile no longer start at the same time and lock each other out.
+
 ### Added
 
 * **`--fingerprint`, `--fp-tags`, `--fp-country`, `--fp-refresh`
