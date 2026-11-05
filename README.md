@@ -20,16 +20,20 @@ actually needs.
 [![engines](https://img.shields.io/badge/engines-Playwright%20%7C%20Selenium%20%7C%20pyppeteer%20%7C%20CDP-informational)](#engines)
 [![needs a Russian exit](https://img.shields.io/badge/needs-a%20Russian%20exit%20%2B%20a%20browser-orange)](#the-one-thing-you-actually-need)
 
-> **What the canary badge means.** The daily canary scrapes three pages of
-> avito.ru through the Scraping Browser API on a Russian exit and is green only
+> **What the canary badge means.** The canary runs once a day (cron
+> `23 5 * * *`, UTC; GitHub may start it later) and scrapes three pages of
+> avito.ru through the Scraping Browser API on a Russian exit. It is green only
 > when that run is complete and its rows pass the data checks. It needs the
-> secrets `TWOCAPTCHA_KEY` and `AVITO_PROXY` and the variable
-> `AVITO_BROWSER_ACCOUNT_ID`; without them it is **red**, naming what is
-> missing, rather than green without having scraped anything. A blocked run,
-> one that never reached the site, or zero rows is red too — after ONE retry
-> on a fresh proxy session when the run exits 5 (a refused connection or a
-> page load that died on the exit). The live
-> measurements are in [Measured results](#measured-results), with their dates.
+> secrets `TWOCAPTCHA_KEY` and `AVITO_PROXY`, plus either the secret
+> `AVITO_CDP_ENDPOINT` or the variable `AVITO_BROWSER_ACCOUNT_ID`; without them
+> it is **red**, naming what is missing. It is never skipped to green. A
+> blocked run, one that never reached the site, or zero rows is red too. A run
+> that exits 5 gets ONE retry on a fresh proxy session (a refused connection
+> or a page load that died on the exit), except when the Scraping Browser API
+> refused the endpoint's login (`deny_no_user`, `deny_bad_password`): a new
+> session cannot fix a stale credential, so the job names the secret to
+> replace. The live measurements are in [Measured results](#measured-results),
+> with their dates.
 
 ---
 
@@ -166,6 +170,40 @@ python3 playwright_scraper.py --mode seller --url https://www.avito.ru/brands/<s
 ```
 
 `--verbose` narrates each page: readiness, the wall met, which rung cleared it.
+
+### A 2Captcha fingerprint on a local browser (Playwright)
+
+```bash
+python3 playwright_scraper.py --fingerprint --fp-country ru --mode listing \
+  --url https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAkS0wA3OqzmwwQ2I_Dc
+```
+
+`--fingerprint` fetches one profile from the
+[2Captcha Fingerprint API](https://2captcha.com/fingerprints/api) with
+`TWOCAPTCHA_KEY` and applies it to the Chromium this scraper launches: user
+agent together with its client hints (`Sec-CH-UA*`, `navigator.userAgentData`),
+locale and `Accept-Language`, timezone, screen and window size, device scale
+factor, `navigator.platform` / `hardwareConcurrency` / `deviceMemory` and the
+WebGL vendor and renderer strings. After the first page the scraper reads
+these back from the live page and records them, with any mismatch, under
+`transport_facts.fingerprint` in the run metadata.
+
+* **Local browser only.** The Scraping Browser API brings its own
+  fingerprint, so a typed `--cdp-endpoint` with `--fingerprint` exits 2, and an
+  `AVITO_CDP_ENDPOINT` from `.env` is ignored for that run (with a notice).
+  Selenium and pyppeteer do not implement `--fingerprint` and refuse it (exit 2).
+* **A separate subscription.** A key without a fingerprint plan is answered
+  `403 ERROR_FINGERPRINT_PLAN_REQUIRED`; the run then exits 5 before any page
+  is fetched.
+* `--fp-tags` takes ONE tag (default `Windows`). `--fp-country` should match
+  the proxy's exit. The response is cached in
+  `~/.cache/2captcha-fingerprints/` per set of flags, so the same flags give the
+  same identity (and no new charge); `--fp-refresh` fetches a new one.
+* What it does not change: the browser engine underneath is still the
+  installed Chromium, which may be a different version from the one the
+  profile names, and WebGL output is the real GPU's. It is a consistent
+  identity, not a guarantee against the firewall — no access difference has
+  been measured with and without it.
 
 ### Narrow by path, not by filter
 
@@ -355,6 +393,14 @@ with its time and cost, rotations, and auto-solve events.
 | Playwright, Scraping Browser | 100 rows, exit 0 — both pages arrived as a skeleton first (ready after 500 and 1000 ms) |
 | Playwright, local Chromium through the proxy | 100 rows, exit 0 — proof-of-work cleared in 1 s, then GeeTest: the first token was refused, a fresh exit's was accepted (15 s and 26 s, $0.00299 each) |
 
+2026-11-05, `--fingerprint --fp-country de`, Playwright, local Chromium 156
+through a residential proxy, the category above, `--pages 1 --max-products 20
+--solve-captcha never`: 20 rows, exit 0, no wall met. The account had no
+fingerprint plan that day (`403 ERROR_FINGERPRINT_PLAN_REQUIRED`), so the
+profile was a real API response from 2026-09-30 served from the cache. Read
+back from the page: user agent, client-hint brands and platform, `de-DE`,
+`Europe/Berlin`, `Win32`, 20 cores, 16 GB, 1366×768 — no mismatch.
+
 `sample_output.json` is cut from the 3-page run (10 rows; seller names
 replaced with placeholders).
 
@@ -416,8 +462,10 @@ own venv and builds the Docker image.
   $0.00299 each. On a local browser the solutions were refused 0 of 15
   (2026-10-14 to 10-20) — see [the one thing you actually need](#the-one-thing-you-actually-need).
   At most one paid solve per page per run.
-* **Fingerprints** — `fingerprint_client.py`. Not used over CDP, where the
-  remote browser brings its own.
+* **[Fingerprints](https://2captcha.com/fingerprints/api)** — `--fingerprint`
+  (Playwright, local browser), billed as a separate subscription on the same
+  key. Not used over CDP, where the remote browser brings its own. See
+  [the fingerprint section](#a-2captcha-fingerprint-on-a-local-browser-playwright).
 
 ---
 

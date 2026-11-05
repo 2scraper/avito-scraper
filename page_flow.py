@@ -68,6 +68,32 @@ SOLVES_PER_PAGE = 1
 PROFILE_LOCKED_RETRIES = 3
 PROFILE_LOCKED_RETRY_DELAY_S = 10
 
+# What the Scraping Browser's 401/500 at connect means, measured 2026-11-05 by
+# changing one part of a working endpoint at a time:
+#   unknown login              -> 401 deny_no_user
+#   known login, bad password  -> 401 deny_bad_password
+#   bad custom-proxy password  -> 500 proxy_error
+#   undecodable -proxy- data   -> 401 Wrong user name format
+# The first two are the CREDENTIAL, so no retry or fresh proxy session helps.
+CDP_CREDENTIAL_REFUSALS = {
+    "deny_no_user": "the Scraping Browser API does not know this endpoint's "
+                    "login: the credential was removed or replaced. Copy a "
+                    "current endpoint from the 2Captcha dashboard into "
+                    "AVITO_CDP_ENDPOINT",
+    "deny_bad_password": "the Scraping Browser API knows this endpoint's login "
+                         "but not its password. Copy a current endpoint from "
+                         "the 2Captcha dashboard into AVITO_CDP_ENDPOINT",
+}
+
+
+def cdp_credential_refusal(message: str):
+    """The explanation for a connect refused because of the endpoint's
+    credential, or None for any other failure."""
+    for marker, why in CDP_CREDENTIAL_REFUSALS.items():
+        if marker in (message or ""):
+            return "%s (%s)" % (why, marker)
+    return None
+
 # Readiness anchors per mode — what "the page has painted" means.
 # A listing is ready when MORE than one card is present: one match can
 # resolve on an unrelated card-shaped node long before the grid paints

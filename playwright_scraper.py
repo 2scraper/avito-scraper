@@ -19,6 +19,8 @@ from __future__ import annotations
 import sys
 
 import browser_bridge
+import fingerprint_client
+import page_flow
 import proxy_pool
 
 # Imported at MODULE level on purpose: the offline suite must be able to skip
@@ -52,9 +54,11 @@ class PlaywrightDriver:
                 self._browser = self._pw.chromium.connect_over_cdp(
                     self.args.cdp_endpoint, timeout=self.args.timeout * 1000)
             except Exception as exc:
+                why = page_flow.cdp_credential_refusal(str(exc))
                 raise browser_bridge.BridgeError(
-                    "could not connect over CDP: %s: %s"
-                    % (type(exc).__name__, browser_bridge.mask_text(str(exc))[:300])) from None
+                    "could not connect over CDP: %s: %s%s"
+                    % (type(exc).__name__, browser_bridge.mask_text(str(exc))[:300],
+                       "\n  -> " + why if why else "")) from None
             contexts = self._browser.contexts
             self._context = contexts[0] if contexts else self._browser.new_context()
             pages = self._context.pages
@@ -67,14 +71,80 @@ class PlaywrightDriver:
                 # where `ps` reads it.
                 launch["proxy"] = proxy_pool.to_playwright(self.args.proxy)
             self._browser = self._pw.chromium.launch(**launch)
-            # No user agent and no fingerprint: a hardcoded UA drifts from the
-            # installed Chromium, and over CDP the remote browser brings its
-            # own (2scraper family rule).
-            self._context = self._browser.new_context(locale="ru-RU")
+            # No hardcoded user agent: it drifts from the installed Chromium.
+            # A fingerprint, when asked for, is applied HERE only — over CDP
+            # the remote browser brings its own (2scraper family rule).
+            fp = self._fingerprint() if getattr(self.args, "fingerprint", False) else None
+            ctx = {"locale": "ru-RU"}
+            if fp:
+                ctx.update(fingerprint_client.playwright_context_kwargs(fp))
+            self._context = self._browser.new_context(**ctx)
+            if fp:
+                self._context.add_init_script(fingerprint_client.playwright_init_script(fp))
             self._page = self._context.new_page()
+            if fp:
+                self._apply_ua_override(self._page, fp)
         self._page.set_default_timeout(self.args.timeout * 1000)
         if over_cdp:
             self._arm_autosolve()
+
+    # --- 2Captcha fingerprint (local browser only) ---------------------------
+    # Fetched once per run: a rotation relaunches the browser on a new exit
+    # with the SAME identity, and each fetch is billed.
+    _fp = None
+    fingerprint_facts = None
+
+    def _fingerprint(self):
+        if self._fp is None:
+            # FingerprintError propagates: run() reports it and exits 5 before
+            # any page is fetched without the identity that was asked for.
+            self._fp = fingerprint_client.get_fingerprint(
+                self.args.twocaptcha_key, tags=self.args.fp_tags,
+                country=self.args.fp_country, refresh=self.args.fp_refresh)
+            self.fingerprint_facts = {
+                "id": self._fp.get("id"), "country": self._fp.get("country"),
+                "user_agent": fingerprint_client.fingerprint_user_agent(self._fp),
+                "not_in_response": fingerprint_client.missing_fields(self._fp),
+                "client_hints": False, "readback": None, "mismatches": None,
+            }
+            print("[i] fingerprint %s (%s): %s" % (
+                self._fp.get("id"), self._fp.get("country"),
+                (self.fingerprint_facts["user_agent"] or "")[:90]), file=sys.stderr)
+            if self.fingerprint_facts["not_in_response"]:
+                print("[!] fingerprint fields not in the response, left as the "
+                      "browser's own: %s" % ", ".join(self.fingerprint_facts["not_in_response"]),
+                      file=sys.stderr)
+        return self._fp
+
+    def _apply_ua_override(self, page, fp):
+        """User agent WITH client hints, so Sec-CH-UA* and userAgentData match
+        the User-Agent header. Per page: CDP emulation is per target."""
+        override = fingerprint_client.user_agent_override(fp)
+        if not override:
+            return
+        try:
+            self._context.new_cdp_session(page).send("Emulation.setUserAgentOverride", override)
+            self.fingerprint_facts["client_hints"] = True
+        except Exception as exc:  # noqa: BLE001
+            print("[!] could not set the fingerprint's client hints: %s"
+                  % str(exc).splitlines()[0][:120], file=sys.stderr)
+
+    def _read_back_fingerprint(self):
+        """Once, after the first page: what the live page reports, compared
+        with the fingerprint. Recorded in the run metadata."""
+        facts = self.fingerprint_facts
+        if not self._fp or facts is None or facts.get("readback") is not None:
+            return
+        try:
+            seen = self._page.evaluate(fingerprint_client.READBACK_JS)
+        except Exception as exc:  # noqa: BLE001
+            facts["readback"] = {"error": str(exc).splitlines()[0][:120]}
+            return
+        facts["readback"] = seen
+        facts["mismatches"] = fingerprint_client.readback_mismatches(self._fp, seen)
+        if facts["mismatches"]:
+            print("[!] the page does not report the fingerprint for: %s"
+                  % "; ".join(facts["mismatches"]), file=sys.stderr)
 
     def _arm_autosolve(self):
         """Rung 1: ask the Scraping Browser to solve the wall itself.
@@ -114,6 +184,8 @@ class PlaywrightDriver:
     def navigate(self, url):
         response = self._page.goto(url, wait_until="domcontentloaded",
                                    timeout=self.args.timeout * 1000)
+        if self._fp is not None:
+            self._read_back_fingerprint()
         return response.status if response else None
 
     def content(self):
@@ -163,6 +235,9 @@ class PlaywrightDriver:
 def main(argv=None) -> int:
     parser = browser_bridge.build_parser(
         "Scrape avito.ru listings, items and seller profiles with Playwright.")
+    # Playwright only: the other two engines do not apply a fingerprint, and
+    # argparse refuses the flag there (exit 2) instead of ignoring it.
+    fingerprint_client.add_arguments(parser)
     args = browser_bridge.parse_args(parser, argv)
     return browser_bridge.run(args, PlaywrightDriver(args))
 

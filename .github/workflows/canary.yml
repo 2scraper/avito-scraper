@@ -110,10 +110,16 @@ jobs:
           live() {
             python3 playwright_scraper.py --mode listing \
               --url https://www.avito.ru/moskva/telefony/mobilnye_telefony/apple-ASgBAgICAkS0wA3OqzmwwQ2I_Dc \
-              --pages 3 --out canary --format both --verbose
+              --pages 3 --out canary --format both --verbose 2>&1 | tee live.log
+            return "${PIPESTATUS[0]}"
           }
           live; rc=$?
-          if [ "$rc" = "5" ]; then
+          # A refused CREDENTIAL (401 deny_no_user / deny_bad_password,
+          # measured 2026-11-05) is not a dropped connection: a fresh proxy
+          # session cannot fix it, so it is named and not retried.
+          if [ "$rc" = "5" ] && grep -qE 'deny_no_user|deny_bad_password' live.log; then
+            echo "::error::the Scraping Browser API refused the login in secret AVITO_CDP_ENDPOINT ($(grep -oE 'deny_no_user|deny_bad_password' live.log | head -1)) — replace the secret with a current endpoint from the 2Captcha dashboard"
+          elif [ "$rc" = "5" ]; then
             echo "::warning::the live run exited 5 (connection or page load failed) — one retry on a fresh proxy session"
             if [ "$HAS_CDP" = "true" ]; then
               python3 tools/browser_profile_client.py canary-env --session-minutes 60
@@ -139,7 +145,7 @@ jobs:
 
       - name: Remove the minted credentials
         if: always()
-        run: rm -f .env
+        run: rm -f .env live.log
 
       - uses: actions/upload-artifact@v4
         if: always()

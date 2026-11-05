@@ -12,7 +12,11 @@ encodings of the same proxy URL:
     padding as '%3D'   -> 401 "Wrong user name format"
 
 Two distinct errors, and the last two agree, so the complaint is about the
-username as a whole rather than the base64 inside it. The vendor's own
+username as a whole rather than the base64 inside it. (Re-measured
+2026-11-05 through `canary-env`'s repoint, padding stripped: proxy URLs
+needing one and two padding characters BOTH connected and served a listing,
+so stripped padding alone does not cause `deny_no_user`. Today that answer
+meant an unknown login — see TROUBLESHOOTING.md.) The vendor's own
 documented example encodes a 39-byte URL -- a multiple of 3, so it needs no
 padding and cannot demonstrate what to do with it. Rather than keep guessing
 at a format, ask the API that builds the string itself:

@@ -10,6 +10,8 @@
 !sample_output.json
 !sample_output.csv
 !sample_output.meta.json
+# A trimmed Fingerprint API response the offline suite reads (see fixtures/README.md).
+!fixtures/fingerprint_chromium.json
 *.latest_attempt.meta.json
 avito.*
 avito_listings.*
