@@ -8,6 +8,25 @@ site accepted it, and every rotation.
 
 ---
 
+## Exit 5 — `401 Unauthorized` and `deny_no_user` at connect
+
+The Scraping Browser API does not know the login in `AVITO_CDP_ENDPOINT`: the
+credential was removed or replaced on the 2Captcha side. Copy a current
+endpoint from the dashboard. Measured 2026-11-05 by changing one part of a
+working endpoint at a time:
+
+| Changed | Answer at connect |
+|---|---|
+| the login | `401 deny_no_user` |
+| the password | `401 deny_bad_password` |
+| the custom proxy's password inside `-proxy-…` | `500 proxy_error` |
+| the `-proxy-…` data made undecodable | `401 Wrong user name format` |
+
+The first two are the credential itself; retrying or minting a new proxy
+session does not help, and the canary does not retry them.
+
+---
+
 ## Exit 3 — «Доступ ограничен: проблема с IP»
 
 avito.ru's own firewall. Run with `--verbose --dump-html page.html` and see

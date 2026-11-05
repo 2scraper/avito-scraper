@@ -598,6 +598,9 @@ def run(args, driver) -> int:
               % (driver.name, type(exc).__name__, mask_text(str(exc))[:300]), file=sys.stderr)
         _stop(driver)
         return failed(EXIT_REMOTE_API_ERROR, exc, "transport_error")
+    if getattr(driver, "fingerprint_facts", None) is not None:
+        # The same dict the driver fills in after the first page.
+        facts["fingerprint"] = driver.fingerprint_facts
 
     try:
         if args.mode == "listing":
@@ -1071,6 +1074,21 @@ def parse_args(parser, argv=None, *, cdp_supported: bool = True):
               "engine cannot use the Scraping Browser API; launching a local "
               "browser.", file=sys.stderr)
         args.cdp_endpoint = None
+    if getattr(args, "fingerprint", False):
+        # A fingerprint is for a browser launched HERE; never stacked on the
+        # Scraping Browser, which brings its own (2scraper family rule).
+        if typed_cdp:
+            parser.error("--fingerprint applies to a locally launched browser and "
+                         "cannot be combined with --cdp-endpoint: the Scraping "
+                         "Browser API brings its own fingerprint.")
+        if args.cdp_endpoint:
+            print("[i] --fingerprint: ignoring AVITO_CDP_ENDPOINT from the "
+                  "environment and launching a local browser.", file=sys.stderr)
+            args.cdp_endpoint = None
+        if not args.twocaptcha_key:
+            parser.error("--fingerprint needs TWOCAPTCHA_KEY (in .env or the "
+                         "environment): the Fingerprint API uses that key, on a "
+                         "separate subscription.")
     if args.concurrency > 1:
         parser.error(
             "--concurrency above 1 is refused on avito.ru: its firewall is a "

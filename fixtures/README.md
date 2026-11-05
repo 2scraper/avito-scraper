@@ -15,6 +15,7 @@ apart from the fields scrubbed below.
 | `seller.html` | `/brands/…` profile | profile counters, 2 of its cards |
 | `wall_captcha.html` | the firewall (HTTP 429) after «Продолжить» | GeeTest v4 form + `captchaId` |
 | `wall_wait.html` | the firewall's third variant, served right after an accepted solve (2026-10-08) | «подождите немного и обновите страницу» → `blocked`; title and text only, SVG and script removed |
+| `fingerprint_chromium.json` | a 2Captcha Fingerprint API response (`/fingerprint/random`, `format=chromium`, 2026-09-30) | where each applied value sits in a real response; trimmed to the read fields, the dropped keys listed inside |
 
 ## Not verbatim
 

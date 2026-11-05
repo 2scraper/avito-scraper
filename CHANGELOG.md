@@ -8,6 +8,32 @@ entry in a blockquote.
 
 ## [Unreleased]
 
+### Added
+
+* **`--fingerprint`, `--fp-tags`, `--fp-country`, `--fp-refresh`
+  (Playwright, local browser).** Fetches a profile from the 2Captcha
+  Fingerprint API and applies it: user agent with matching client hints
+  (`Sec-CH-UA*`, `navigator.userAgentData`), locale and `Accept-Language`,
+  timezone, screen, window and scale factor, navigator values and WebGL
+  strings. The values are read back from the page after the first navigation
+  and recorded in `transport_facts.fingerprint`. Refused with a typed
+  `--cdp-endpoint` (exit 2); an endpoint from `.env` is ignored for the run.
+  A key without a fingerprint plan exits 5 before any page is fetched.
+
+### Fixed
+
+* **`fingerprint_client.py` read fields a real response does not have.** The
+  WebGL strings were read from `webgl.vendor`/`webgl.renderer` (they are in
+  `webgl.glParameters`), and a user-agent override without client hints left
+  the real Chromium's `Sec-CH-UA` (`HeadlessChrome/156` under a `Chrome/150`
+  user agent, measured). No engine used the client before, so no run was
+  affected.
+* **A refused Scraping Browser login is named.** `401 deny_no_user` /
+  `deny_bad_password` at connect now says the credential in
+  `AVITO_CDP_ENDPOINT` must be replaced, and the canary no longer spends its
+  retry on it. The canary had been red since 2026-10-24 for this reason.
+
+
 ## [1.1.2] — 2026-10-20
 
 > **`python3 env_config.py` printed the dashboard-form proxy whole.** With
