@@ -49,7 +49,7 @@ of the three places moved — it narrows the fix a lot:
 3. **Seller pages** — `[data-marker="profile"]` and the profile counters.
 
 Or the **firewall** changed: a captcha type other than GeeTest v4 (its code
-also carries hCaptcha and an image captcha). Attach a `--dump-html` capture
+also carries two other captcha types, one of them an image captcha). Attach a `--dump-html` capture
 with anything personal removed.
 
 ## Pull requests
