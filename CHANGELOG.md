@@ -323,15 +323,16 @@ has a regression test.
   which included that third variant. A solve that is followed by something
   else records `after_submit`. A proof-of-work after a solve is waited out.
 * **The wall's other two captchas.** The page can show Avito's own picture
-  captcha or hCaptcha instead of GeeTest; the scraper now recognises which
+  captcha or a third captcha type instead of GeeTest; the scraper now recognises which
   one is showing and records it (`solves[].variant`). The picture captcha is
   solved with `ImageToTextTask` and answered through the page's own field —
   implemented from the wall's script, not yet met live (every measured
-  request was assigned GeeTest). hCaptcha is solved with `HCaptchaTask`
-  (sitekey from the wall, the browser's own exit, `enterprisePayload.rqdata`
-  only if the wall ever carries one) and its token submitted through
-  `#h-captcha-response` — also not yet met live. One live `HCaptchaTask` on
-  avito's sitekey (2026-10-09) was accepted by the API and returned
+  request was assigned GeeTest). The third type is solved with 2Captcha's
+  matching task (sitekey from the wall, the browser's own exit, the
+  enterprise payload only if the wall ever carries one) and its token
+  submitted through the page's own response field — also not yet met live.
+  One live solve request for it on avito's sitekey (2026-10-09) was accepted
+  by the API and returned
   ERROR_CAPTCHA_UNSOLVABLE after 51 s: the request shape is right, a solved
   token for this wall is not yet measured.
 * **`--mode seller` now returns all of a seller's listings**, not the 15
@@ -425,6 +426,6 @@ First release.
 
 * A seller profile's listings beyond the 15 rendered on first load are not
   fetched.
-* hCaptcha and Avito's own image captcha appear in the firewall's code but
+* A third captcha type and Avito's own image captcha appear in the firewall's code but
   were never served in a measured run; this repo does not implement them yet.
 * `--concurrency` above 1 is refused: the firewall is a request-rate decision.

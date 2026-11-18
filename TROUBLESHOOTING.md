@@ -38,7 +38,7 @@ which variant you met:
 | «Продолжить» and, after it, a GeeTest slide puzzle | 429 | the scraper solves it (below) |
 | «подождите немного и обновите страницу», nothing to solve | 429 | follows a REJECTED solution; the scraper moves to a fresh exit (`--proxy-block-retries`) |
 | «введите символы с картинки» — Avito's picture captcha | 429 | solved with `ImageToTextTask`; never met live yet — if you see it, `solves[].variant` is `image` and a report is welcome |
-| hCaptcha («поставьте галочку») | 429 | solved with `HCaptchaTask` through the browser's exit; never met live yet — `solves[].variant` is `hcaptcha` |
+| a third captcha type («поставьте галочку») | 429 | solved through 2Captcha with the browser's exit; never met live yet — `solves[].variant` names it |
 
 `transport_facts.solves[]` names the variant of every wall met, its 2Captcha
 `task_id` and, on failure, 2Captcha's own error code.
