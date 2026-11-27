@@ -55,16 +55,15 @@ _PLACEHOLDERS = {
     "",
 }
 
-# .env.example documents AVITO_CDP_ENDPOINT and AVITO_PROXY
-# the way the vendor itself documents them, with the parts you fill in in
-# braces:
+# .env.example documents AVITO_CDP_ENDPOINT (as the Browser API dashboard
+# gives it) and AVITO_PROXY, with the parts you fill in in braces:
 #
-#     ws://{login}-zone-scraping_browser-country-{cc}-pid-{profileId}:{password}@cb.2captcha.com:9222
+#     ws://{login}-country-{cc}-pid-{profileId}:{password}@cb.2captcha.com:9222
 #     http://{user}:{password}@eu.proxy.2captcha.com:2334
 #
 # Neither of those matches a literal in _PLACEHOLDERS, so without this check
 # a copied example reads as CONFIGURED: `cp .env.example .env` followed by a
-# run connects to cb.2captcha.com with the string `{login}-zone-...` as its
+# run connects to cb.2captcha.com with the string `{login}-country-...` as its
 # username and gets a 401 -- a confusing auth error a long way from its
 # cause. Any `{...}` left in a value is unset here, named rather than
 # quoted in the warning, since the value can be a credentialled URL.
