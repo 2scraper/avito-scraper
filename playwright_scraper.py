@@ -191,13 +191,17 @@ class PlaywrightDriver:
     def content(self):
         try:
             return self._page.content()
-        except Exception:
+        except Exception as exc:
+            if browser_bridge.browser_gone(exc):
+                raise browser_bridge.browser_closed_error(exc) from None
             return ""
 
     def count(self, selector):
         try:
             return self._page.locator(selector).count()
-        except Exception:
+        except Exception as exc:
+            if browser_bridge.browser_gone(exc):
+                raise browser_bridge.browser_closed_error(exc) from None
             return 0
 
     def run_js(self, body):
@@ -210,7 +214,12 @@ class PlaywrightDriver:
             "() => { window.scrollTo(0, document.body.scrollHeight); return document.body.scrollHeight; }")
 
     def sleep(self, ms):
-        self._page.wait_for_timeout(ms)
+        try:
+            self._page.wait_for_timeout(ms)
+        except Exception as exc:
+            if browser_bridge.browser_gone(exc):
+                raise browser_bridge.browser_closed_error(exc) from None
+            raise
 
     def stop(self):
         # Over CDP the page and context belong to the remote profile; closing

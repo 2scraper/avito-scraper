@@ -83,13 +83,17 @@ class SeleniumDriver:
     def content(self):
         try:
             return self._driver.page_source
-        except Exception:
+        except Exception as exc:
+            if browser_bridge.browser_gone(exc):
+                raise browser_bridge.browser_closed_error(exc) from None
             return ""
 
     def count(self, selector):
         try:
             return len(self._driver.find_elements(By.CSS_SELECTOR, selector))
-        except Exception:
+        except Exception as exc:
+            if browser_bridge.browser_gone(exc):
+                raise browser_bridge.browser_closed_error(exc) from None
             return 0
 
     def run_js(self, body):

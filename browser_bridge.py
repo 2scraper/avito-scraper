@@ -97,6 +97,35 @@ class BridgeError(RuntimeError):
     """
 
 
+# What each engine raises once the browser behind it is gone. Measured
+# 2026-11-27 by killing a local Chromium under each driver: Playwright over
+# CDP still reported is_closed() False and is_connected() True, so the
+# exception is the only reliable sign. A page that is merely navigating
+# raises something else ("page is navigating", "Execution context was
+# destroyed") and stays a quiet retry.
+_BROWSER_GONE_TYPES = ("TargetClosedError", "InvalidSessionIdException")
+_BROWSER_GONE_RE = re.compile(
+    r"Target page, context or browser has been closed"        # Playwright
+    r"|Session closed\. Most likely the page has been closed"  # pyppeteer
+    r"|invalid session id")                                    # Selenium
+
+
+def browser_gone(exc: BaseException) -> bool:
+    """True when `exc` means the browser itself is gone, not a busy page."""
+    return (type(exc).__name__ in _BROWSER_GONE_TYPES
+            or bool(_BROWSER_GONE_RE.search(str(exc))))
+
+
+def browser_closed_error(exc: BaseException) -> "BridgeError":
+    """The BridgeError a driver raises for a browser that went away. Live,
+    2026-11-27: the Scraping Browser closed 17 s into page 2; the driver's
+    TargetClosedError escaped as a crash (exit 1) and page 1's 50 rows were
+    thrown away. As a BridgeError it is a transport fault: exit 6 with the
+    rows kept, or exit 5 before any row."""
+    message = mask_text(str(exc)).splitlines()[0][:200] if str(exc) else ""
+    return BridgeError("the browser closed: %s: %s" % (type(exc).__name__, message))
+
+
 # ---------------------------------------------------------------------------
 # Waiting
 # ---------------------------------------------------------------------------
@@ -123,6 +152,8 @@ def wait_for_content(driver, mode: str, url: str, timeout_ms: int, log=None) -> 
                 break
             elif P.detect_page_state(html, url=url) == "empty":
                 break
+        except BridgeError:
+            raise  # the browser is gone: waiting longer cannot help
         except Exception:  # a driver may throw mid-navigation
             pass
         driver.sleep(step)
