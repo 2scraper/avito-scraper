@@ -297,13 +297,19 @@ def repoint_endpoint(given: str, proxy_url: str) -> str:
     from urllib.parse import quote, unquote, urlsplit, urlunsplit
     ep = urlsplit(given.strip())
     user = unquote(ep.username or "")
-    if not user or "-zone-" not in user:
-        raise ValueError("the endpoint has no Scraping Browser login segment")
+    # The dashboard's endpoint may carry no `-zone-` segment at all
+    # (`LOGIN-country-xx-pid-ID`), so only an empty login is refused.
+    if not user:
+        raise ValueError("the endpoint has no login segment")
     user = re.sub(r"-proxy-[A-Za-z0-9_=-]+$", "", user)
     if re.search(r"-country-[a-z]{2}", user):
         user = re.sub(r"-country-[a-z]{2}", "-country-ru", user)
-    else:
+    elif "-pid-" in user:
+        user = user.replace("-pid-", "-country-ru-pid-", 1)
+    elif re.search(r"-zone-[a-z_]+", user):
         user = re.sub(r"(-zone-[a-z_]+)", r"\1-country-ru", user, count=1)
+    else:
+        user += "-country-ru"
     user += "-proxy-" + base64.urlsafe_b64encode(proxy_url.encode()).decode().rstrip("=")
     netloc = (quote(user, safe="-_.~") + ":" + quote(unquote(ep.password or ""), safe="-_.~")
               + "@" + (ep.hostname or "") + (f":{ep.port}" if ep.port else ""))
