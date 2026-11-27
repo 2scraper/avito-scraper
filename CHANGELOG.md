@@ -10,6 +10,7 @@ entry in a blockquote.
 
 ### Changed
 
+- Docs: `.env.example` and the placeholder note in `env_config.py` show the Browser API endpoint as the dashboard gives it, `ws://{login}-country-{cc}-pid-{profileId}:{password}@cb.2captcha.com:9222`, without a `-zone-` segment.
 - canary: accept Browser API endpoints without a -zone- segment. The dashboard's endpoint is `LOGIN-country-xx-pid-ID`, and the canary refused it as "no Scraping Browser login segment"; only an empty login is refused now, and `-country-ru` goes before `-pid-` when the login has no country.
 - CI only: the offline-checks job runs on `ubuntu-24.04` instead of `ubuntu-latest`, which moved to Ubuntu 26.04, where `actions/setup-python` has no Python 3.9 build. 3.9 stays the supported floor.
 - Docker: the image installs `libatomic1` before Playwright. Recent Playwright releases' Node driver needs it to run `playwright install` at all, and the slim base image does not ship it, so the image build failed.
