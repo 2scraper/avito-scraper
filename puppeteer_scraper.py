@@ -29,6 +29,10 @@ from pyppeteer import connect, launch
 
 
 CDP_CONNECT_TIMEOUT_S = 30
+# Reading the page is quick; past this the browser is asked whether it is
+# still there. Measured 2026-11-27: with the browser killed between calls,
+# page.content() never settled and the run hung for good.
+READ_TIMEOUT_S = 15
 
 
 class PuppeteerDriver:
@@ -118,17 +122,30 @@ class PuppeteerDriver:
             url, {"waitUntil": "domcontentloaded", "timeout": self.args.timeout * 1000}))
         return response.status if response else None
 
-    def content(self):
+    def _connected(self):
+        conn = getattr(self._browser, "_connection", None)
+        return bool(getattr(conn, "_connected", True))
+
+    def _read(self, call, quiet):
+        """A bounded page read: a dead browser is a BridgeError, a page that
+        is only navigating gives `quiet` and is retried by the caller."""
         try:
-            return self._run(self._page.content())
-        except Exception:
-            return ""
+            return self._run(asyncio.wait_for(call(), READ_TIMEOUT_S))
+        except Exception as exc:
+            if browser_bridge.browser_gone(exc):
+                raise browser_bridge.browser_closed_error(exc) from None
+            if not self._connected():
+                raise browser_bridge.BridgeError(
+                    "the browser closed: the CDP connection dropped (%s)"
+                    % type(exc).__name__) from None
+            return quiet
+
+    def content(self):
+        return self._read(lambda: self._page.content(), "")
 
     def count(self, selector):
-        try:
-            return len(self._run(self._page.querySelectorAll(selector)))
-        except Exception:
-            return 0
+        found = self._read(lambda: self._page.querySelectorAll(selector), None)
+        return 0 if found is None else len(found)
 
     def run_js(self, body):
         return self._run(self._page.evaluate("() => { %s }" % body))

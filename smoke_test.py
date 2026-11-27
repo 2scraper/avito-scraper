@@ -2407,6 +2407,179 @@ def test_a_dropped_connection_after_collected_pages_keeps_them():
                 check("%s: nothing written" % name, not os.path.exists(os.path.join(tmp, "o.json")))
 
 
+def _gone(type_name, message):
+    """An exception shaped like the one an engine raises (class name and
+    text measured 2026-11-27 by killing a local Chromium under each driver)."""
+    return type(type_name, (Exception,), {})(message)
+
+
+PW_CLOSED = ("TargetClosedError",
+             "Page.wait_for_timeout: Target page, context or browser has been closed")
+PP_CLOSED = ("NetworkError", "Protocol Error (Runtime.callFunctionOn): Session closed. "
+                             "Most likely the page has been closed.")
+SE_CLOSED = ("InvalidSessionIdException",
+             "Message: invalid session id: session deleted as the browser has closed the connection")
+NAVIGATING = [("Error", "Page.content: Unable to retrieve content because the page is "
+                        "navigating and changing the content."),
+              ("NetworkError", "Execution context was destroyed, most likely because of a navigation."),
+              ("Error", "Page.goto: net::ERR_CONNECTION_CLOSED at " + LISTING)]
+
+
+class ClosingDriver(FakeDriver):
+    """Page 1 loads; page 2 never paints and the browser goes away during the
+    wait — in `sleep` (Playwright: wait_for_timeout) or in `content`
+    (Selenium/pyppeteer: their sleep never touches the browser)."""
+
+    def __init__(self, pages, close_on, where, first_error=None):
+        super().__init__(pages)
+        self.close_on, self.where, self.first_error = close_on, where, first_error
+        self.navigations = 0
+
+    def navigate(self, url):
+        self.navigations += 1
+        status = super().navigate(url)
+        if self.navigations == self.close_on:
+            self.current = ""
+        return status
+
+    def _closed(self):
+        import browser_bridge
+        if self.navigations == self.close_on:
+            raise browser_bridge.browser_closed_error(_gone(*PW_CLOSED))
+
+    def content(self):
+        if self.first_error is not None:
+            exc, self.first_error = self.first_error, None
+            raise exc
+        if self.where == "content":
+            self._closed()
+        return super().content()
+
+    def sleep(self, ms):
+        if self.where == "sleep":
+            self._closed()
+
+
+def test_a_browser_that_closes_mid_run_keeps_the_rows_gathered_before_it():
+    """Live canary, 2026-11-27: page 1 gave 50 rows over the Scraping Browser,
+    then the browser closed 17 s into page 2. Playwright's TargetClosedError
+    came out of the readiness wait's sleep, outside any BridgeError, and the
+    run ended as a crash: exit 1, the 50 rows thrown away, and no canary
+    retry (that is for exit 5). A browser that went away is a transport fault:
+    exit 6 with the rows kept, exit 5 before any row."""
+    import browser_bridge
+    for name, (t, m) in (("playwright", PW_CLOSED), ("pyppeteer", PP_CLOSED), ("selenium", SE_CLOSED)):
+        check("browser_gone recognises %s's closed browser" % name, browser_bridge.browser_gone(_gone(t, m)))
+    for t, m in NAVIGATING:
+        check("browser_gone leaves %r alone" % m[:40], not browser_bridge.browser_gone(_gone(t, m)))
+    err = browser_bridge.browser_closed_error(_gone("TargetClosedError", "Target page, context or browser "
+                                                    "has been closed ws://" + "u:p" + "@cb.2captcha.com:9222"))
+    check("the closed-browser error is a BridgeError", isinstance(err, browser_bridge.BridgeError))
+    check("and masks a credentialled URL", "u:p@" not in str(err), str(err))
+
+    listing = fixture("listing_dom.html")
+    cases = (
+        ("closed in sleep on page 2", dict(url=[LISTING], pages=3), [listing, listing], 2, "sleep", 6),
+        ("closed in content on page 2", dict(url=[LISTING], pages=3), [listing, listing], 2, "content", 6),
+        ("closed on page 1", dict(url=[LISTING], pages=3), [listing], 1, "sleep", 5),
+        ("items, closed on item 2", dict(mode="item", url=[ITEM_COMPANY, ITEM_PRIVATE]),
+         [fixture("item_company.html"), fixture("item_private.html")], 2, "sleep", 6),
+    )
+    for name, kw, pages, close_on, where, want in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            args = _args(out=os.path.join(tmp, "o"), **kw)
+            rc = _quiet(browser_bridge.run, args, ClosingDriver(pages, close_on, where))
+            meta = json.load(open(os.path.join(tmp, "o.latest_attempt.meta.json")))
+            eq("%s: exit code" % name, rc, want)
+            check("%s: not a crash" % name, meta.get("stop_reason") != "crash", "(%s)" % meta.get("stop_reason"))
+            if want == 6:
+                rows = json.load(open(os.path.join(tmp, "o.json")))
+                check("%s: the gathered rows are written" % name, len(rows) >= 1, "(%d rows)" % len(rows))
+                eq("%s: status" % name, meta.get("status"), "partial")
+                check("%s: the failed page is named" % name,
+                      close_on in (meta.get("pages_failed") or []), "(%s)" % meta.get("pages_failed"))
+                check("%s: the reason is kept" % name,
+                      "the browser closed" in json.dumps(meta.get("transport_facts")))
+            else:
+                check("%s: nothing written" % name, not os.path.exists(os.path.join(tmp, "o.json")))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        args = _args(out=os.path.join(tmp, "o"), url=[LISTING], pages=1)
+        busy = _gone(*NAVIGATING[0])
+        rc = _quiet(browser_bridge.run, args, ClosingDriver([listing], 0, "", first_error=busy))
+        eq("a page that is only navigating is still waited out", rc, 0)
+
+
+def test_each_engine_turns_a_closed_browser_into_a_bridge_error():
+    """The drivers swallowed every exception in content()/count() and
+    returned "" / 0 — a dead browser then looked like a page still loading
+    until the timeout. Only the measured closed-browser errors change that;
+    a navigating page keeps the quiet retry."""
+    import browser_bridge
+
+    def raiser(exc):
+        def f(*a, **k):
+            raise exc
+        return f
+
+    class Obj:
+        pass
+    engines = (("playwright", "playwright_scraper", "PlaywrightDriver", PW_CLOSED),
+               ("selenium", "selenium_scraper", "SeleniumDriver", SE_CLOSED),
+               ("pyppeteer", "puppeteer_scraper", "PuppeteerDriver", PP_CLOSED))
+    for engine, module, cls, closed in engines:
+        try:
+            mod = __import__(module)
+        except ImportError:
+            skip("%s closed-browser guard (engine absent)" % engine)
+            continue
+        for label, exc, gone in (("closed", _gone(*closed), True), ("navigating", _gone(*NAVIGATING[0]), False)):
+            d = getattr(mod, cls).__new__(getattr(mod, cls))
+            page = Obj()
+            page.content = raiser(exc)
+            page.querySelectorAll = raiser(exc)
+            page.wait_for_timeout = raiser(exc)
+            page.locator = raiser(exc)
+            drv = Obj()
+            drv.find_elements = raiser(exc)
+            d._page, d._driver = page, drv
+            d._run, d._browser = (lambda x: x), None
+            if engine == "selenium":
+                type(drv).page_source = property(raiser(exc))
+            for op, call, quiet in (("content", lambda: d.content(), ""), ("count", lambda: d.count("a"), 0)):
+                try:
+                    got = call()
+                    check("%s %s on a %s browser" % (engine, op, label), not gone and got == quiet, repr(got))
+                except browser_bridge.BridgeError as e:
+                    check("%s %s on a %s browser" % (engine, op, label), gone and "the browser closed" in str(e), str(e))
+            if engine == "selenium":
+                type(drv).page_source = None
+            if engine == "playwright":
+                try:
+                    d.sleep(10)
+                    raised = None
+                except browser_bridge.BridgeError:
+                    raised = "BridgeError"
+                except Exception:
+                    raised = "as-is"
+                eq("playwright sleep on a %s browser raises" % label, raised,
+                   "BridgeError" if gone else "as-is")
+        if engine == "pyppeteer":
+            import asyncio
+            for connected, want in ((False, "BridgeError"), (True, "")):
+                d = mod.PuppeteerDriver.__new__(mod.PuppeteerDriver)
+                page, conn, browser = Obj(), Obj(), Obj()
+                page.content = lambda: None
+                conn._connected, browser._connection = connected, conn
+                d._page, d._browser = page, browser
+                d._run = raiser(asyncio.TimeoutError())
+                try:
+                    got = d.content()
+                except browser_bridge.BridgeError:
+                    got = "BridgeError"
+                eq("pyppeteer: a read that never settles, connection %s"
+                   % ("dropped" if not connected else "up"), got, want)
+
 def test_canary_cannot_go_green_without_scraping():
     """The canary took a green SKIP branch every day for a week: a badge that
     said nothing about the site. Missing credentials and a non-zero live run

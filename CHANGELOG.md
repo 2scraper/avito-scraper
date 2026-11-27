@@ -30,6 +30,11 @@ entry in a blockquote.
 
 ### Fixed
 
+* **A browser that closes mid-run no longer crashes the run or throws away its rows.**
+  > Behaviour change: such a run now exits **6** (partial, the rows gathered before it written) or **5** (no row yet), instead of **1** (crash).
+
+  Live, 2026-11-27: page 1 gave 50 rows over the Scraping Browser, the browser closed 17 s into page 2, and Playwright's `TargetClosedError` from the readiness wait ended the run as a crash with nothing written. All three engines now raise the transport error for a closed browser from their page reads (and Playwright's waits), so the existing partial-run path applies. Selenium and pyppeteer used to read a dead browser as an empty page until the wait timed out; pyppeteer could hang for good on a browser that died between calls, and its page reads are now bounded (15 s) and check the connection. A page that is only navigating is still waited out as before.
+
 * **`fingerprint_client.py` read fields a real response does not have.** The
   WebGL strings were read from `webgl.vendor`/`webgl.renderer` (they are in
   `webgl.glParameters`), and a user-agent override without client hints left
