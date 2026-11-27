@@ -2462,13 +2462,32 @@ def test_canary_endpoint_lives_in_a_tool_and_a_dropped_run_is_retried_once():
     check("repoint: and carries the NEW session", "BBBBBBBBB" in b64.urlsafe_b64decode(
         again.split("-proxy-", 1)[1] + "==").decode())
     bare = bpc.repoint_endpoint(given.replace("-country-us", ""), proxy1)
-    check("repoint: a login without -country- gets one after the zone",
-          "-zo" "ne-scraping_browser-country-ru-" in unquote(urlsplit(bare).username))
+    check("repoint: a login without -country- gets one before -pid-",
+          "-zo" "ne-scraping_browser-country-ru-pid-" in unquote(urlsplit(bare).username))
+    # The dashboard's own format has no -zone- segment (2026-11-27: the canary
+    # refused a correct secret). Each shape must end up with exactly one
+    # -country-ru, before -pid-, and the -proxy- segment last.
+    shapes = {
+        "with -zone-": given,
+        "no -zone-, -country-us-pid-": "ws://" + "EXAMPLELOGIN-country-us-pid-pabc" + ":" + "EXAMPLEPW"
+                                       + "@cb.2captcha.com:9222",
+        "no -country-, -pid- only": "ws://" + "EXAMPLELOGIN-pid-pabc" + ":" + "EXAMPLEPW"
+                                    + "@cb.2captcha.com:9222",
+    }
+    for label, ep in shapes.items():
+        u = unquote(urlsplit(bpc.repoint_endpoint(ep, proxy1)).username)
+        head, _, enc = u.rpartition("-proxy-")
+        check(f"repoint ({label}): exactly one -country-ru, no other country",
+              u.count("-country-") == 1 and u.count("-country-ru") == 1, u)
+        check(f"repoint ({label}): -country-ru precedes -pid-", "-country-ru-pid-" in head, u)
+        check(f"repoint ({label}): -proxy-<base64url of the proxy> is the last segment",
+              u.count("-proxy-") == 1 and b64.urlsafe_b64decode(
+                  enc + "=" * (-len(enc) % 4)).decode() == proxy1, u)
     try:
-        bpc.repoint_endpoint("ws://" + "nologin:pw" + "@cb.2captcha.com:9222", proxy1)
-        check("repoint: a login without -zone- is refused", False)
+        bpc.repoint_endpoint("ws://" + ":pw" + "@cb.2captcha.com:9222", proxy1)
+        check("repoint: an empty login is refused", False)
     except ValueError:
-        check("repoint: a login without -zone- is refused", True)
+        check("repoint: an empty login is refused", True)
 
     path = os.path.join(HERE, ".github", "workflows", "canary.yml")
     if not os.path.isdir(os.path.join(HERE, ".github")):
